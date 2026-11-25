@@ -47,18 +47,27 @@ import type { ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 import { converseInWorkbench, scrubEach, workbenchSession } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 
+// The flags as two stack runs measured them (#716 item 4). `saveRefused`: the refreshed-away
+// session's status 2 is refused, so 「保存未写回文件」 is awaited after the Agent turn. `closedPinned`:
+// whether the close rewriting the saved file (`closedRewrote`) is asserted; false where the runs
+// disagreed, which leaves it null, recorded only. All of #737's and #716's runs found it rewritten.
+const TYPED_CLEAN = { typeFirst: false, saveRefused: false, closedPinned: true } as const;
+const TYPED_UNSAVED = { typeFirst: true, saveRefused: true, closedPinned: true } as const;
 /**
  * §60's DOCX cases in order, the second typing a nonce, unsaved, before the Agent rewrites the
- * file; then #657 A4's clean XLSX and PPTX, each from the Document Server's blank template.
+ * file; then #657 A4's clean XLSX and PPTX, each from the Document Server's blank template; then
+ * #716's unsaved XLSX and PPTX, typed into as the unsaved DOCX is.
  */
 const CASES = [
-  { id: 'clean', name: '干净改写.docx', ext: 'docx', typeFirst: false },
-  { id: 'unsaved', name: '未保存改写.docx', ext: 'docx', typeFirst: true },
-  { id: 'xlsx', name: '干净改写.xlsx', ext: 'xlsx', typeFirst: false },
-  { id: 'pptx', name: '干净改写.pptx', ext: 'pptx', typeFirst: false },
+  { id: 'clean', name: '干净改写.docx', ext: 'docx', ...TYPED_CLEAN },
+  { id: 'unsaved', name: '未保存改写.docx', ext: 'docx', ...TYPED_UNSAVED },
+  { id: 'xlsx', name: '干净改写.xlsx', ext: 'xlsx', ...TYPED_CLEAN },
+  { id: 'pptx', name: '干净改写.pptx', ext: 'pptx', ...TYPED_CLEAN },
+  { id: 'unsaved-xlsx', name: '未保存改写.xlsx', ext: 'xlsx', ...TYPED_UNSAVED },
+  { id: 'unsaved-pptx', name: '未保存改写.pptx', ext: 'pptx', ...TYPED_UNSAVED },
 ] as const;
 type CaseId = (typeof CASES)[number]['id'];
-type CaseIndex = 0 | 1 | 2 | 3;
+type CaseIndex = 0 | 1 | 2 | 3 | 4 | 5;
 /** #652: the rewrite lands while A is still typing, before the typing reached the Document Server. */
 const TYPING = { id: 'typing', name: '键入改写.docx', ext: 'docx' } as const;
 /** Letters only: no space or punctuation for autocorrect to act on, nothing NONCE_PATTERN matches. */
@@ -95,7 +104,9 @@ const COPY = { copies: 1, listed: true, cleared: true };
  * still shown at the instant before the save, and in both cases no notice and no refetch in the
  * quiet window after the save's clear. Each awaited positive arrived within a session timeout: the
  * refetch in both cases, 「保存未写回文件」 in the unsaved one. #657 A4's prediction, for the stack
- * to confirm: the clean XLSX and PPTX cases equal the clean DOCX one.
+ * to confirm: the clean XLSX and PPTX cases equal the clean DOCX one. #716 item 4, two stack runs:
+ * the unsaved XLSX and PPTX cases equal the unsaved DOCX one, and in every case the close rewrote
+ * the saved file (`closedRewrote`, as in all ten of #737's samples).
  */
 const CLEAN = {
   notices: { staleChanged: UNSEEN, staleRemoved: UNSEEN, saveFailed: UNSEEN },
@@ -104,20 +115,20 @@ const CLEAN = {
   arrived: { config: true, saveFailed: false },
   states: ['agent-only', 'both', 'both'],
   typed: [false, false, false],
+  closedRewrote: true,
   entries: { saved: NO_ENTRIES, closed: NO_ENTRIES },
   allowed: true,
   sessions: [QUIET, QUIET],
   forgotten: NO_COPY,
 };
 const REFUSED = { before: false, window: true, atSave: true, saved: true, quiet: false };
+const UNSAVED = {
+  ...{ ...CLEAN, notices: { ...CLEAN.notices, saveFailed: REFUSED } },
+  ...{ arrived: { config: true, saveFailed: true }, forgotten: COPY },
+};
 export const EXPECTED_REWRITE = {
-  clean: CLEAN,
-  unsaved: {
-    ...{ ...CLEAN, notices: { ...CLEAN.notices, saveFailed: REFUSED } },
-    ...{ arrived: { config: true, saveFailed: true }, forgotten: COPY },
-  },
-  xlsx: CLEAN,
-  pptx: CLEAN,
+  ...{ clean: CLEAN, unsaved: UNSAVED, xlsx: CLEAN, pptx: CLEAN },
+  ...{ 'unsaved-xlsx': UNSAVED, 'unsaved-pptx': UNSAVED },
 };
 const NONE_SHOWN = { staleChanged: false, staleRemoved: false, saveFailed: false };
 const SAVE_FAILED = { ...NONE_SHOWN, saveFailed: true };
@@ -128,7 +139,7 @@ const SAVE_FAILED = { ...NONE_SHOWN, saveFailed: true };
  * save landed (one `saved`), and no notice showed after it; one `change`, one `save-error`, no
  * refresh request; the file the Agent's after the rewrite and both sides' after the save and the
  * close, the in-window typing in no read; no new or missing work entry; 18.5's allowed errors.
- * #716, as the stack on b35c876 measured it: no notice in the quiet window after the clear.
+ * #716, as #737's stack runs measured it: no notice in the quiet window after the clear.
  */
 export const EXPECTED_TYPING = {
   notices: { before: NONE_SHOWN, window: SAVE_FAILED, saved: NONE_SHOWN, end: NONE_SHOWN },
@@ -248,17 +259,20 @@ const readFacts = (reads: EditedEvidence['reads']) => ({
  * What EXPECTED_REWRITE fixes of one case; `typed` is false where nothing was typed first. Of
  * `arrived` only whether each positive held within the bound: one landing past it, still inside the
  * negative window, leaves `config.window` and the window latch as if it had arrived.
+ * `closedRewrote`: whether the closed read's digest differs from the saved read's; null, recorded
+ * only, unless `closedPinned`.
  */
-export function rewriteFacts(evidence: RewriteCaseEvidence) {
+export function rewriteFacts(evidence: RewriteCaseEvidence, closedPinned: boolean) {
   const { notices, cleared, config, reads, entries, allowed, editor, agent, forgotten } = evidence;
   const sessions = [editor, agent].map((browser) =>
     Object.fromEntries(SESSION_LISTS.map((key) => [key, browser[key].length])),
   );
   const { arrived } = evidence;
+  const closedRewrote = closedPinned ? reads.closed.sha256 !== reads.saved.sha256 : null;
   return {
     ...{ notices, cleared, config },
     arrived: { config: arrived.config !== null, saveFailed: arrived.saveFailed !== null },
-    ...{ ...readFacts(reads), entries, allowed, sessions, forgotten },
+    ...{ ...readFacts(reads), closedRewrote, entries, allowed, sessions, forgotten },
   };
 }
 
@@ -317,7 +331,10 @@ export function officeRewriteLine(evidence: OfficeRewriteEvidence | undefined) {
   const { clean, unsaved, xlsx, pptx, typing } = evidence;
   return {
     ...{ clean: caseLine(clean), unsaved: caseLine(unsaved) },
-    ...{ xlsx: caseLine(xlsx), pptx: caseLine(pptx), typing: typingLine(typing) },
+    ...{ xlsx: caseLine(xlsx), pptx: caseLine(pptx) },
+    'unsaved-xlsx': caseLine(evidence['unsaved-xlsx']),
+    'unsaved-pptx': caseLine(evidence['unsaved-pptx']),
+    typing: typingLine(typing),
   };
 }
 
@@ -540,7 +557,7 @@ async function rewriteCase(
   held: ForgottenKey,
 ) {
   const { session } = lane;
-  const { id, name, ext, typeFirst } = CASES[index];
+  const { id, name, ext, typeFirst, saveRefused, closedPinned } = CASES[index];
   const script = lane.rewrites[index];
   if (script === undefined) throw new Error('Office rewrite script missing');
   const read = await freshFile(lane, CASES[index], script.nonce);
@@ -548,9 +565,12 @@ async function rewriteCase(
   const directory = join(root, id);
   const shot = `office-rewrite-${id}`;
   const { fetched, responses, record } = responseLog();
+  // The typed nonce apart from the saved one: the PPTX save typing at the same title point can split
+  // it. In an XLSX both typings hit the same cell, so a kept typed nonce cannot be seen; there the
+  // refresh, the refused save and the forgotten copy prove the discard.
   const observe = (file: OfficeRead): Observed => ({
     state: rewriteState(file.texts, script.nonce, saved),
-    ...(typeFirst ? { typed: holds(file.texts, typed) } : {}),
+    ...(typeFirst ? { typed: heldApart(file.texts, typed, saved) } : {}),
     ...digest(file),
   });
   const browse = async (page: Page, shoot: (name: string) => Promise<void>) => {
@@ -573,7 +593,7 @@ async function rewriteCase(
     const rewritten = observe(await read());
     let entries: { saved: EntryDiff } | undefined;
     const span = await noticeSpan(page, {
-      ...{ fetched, open, shown, waitSaveFailed: typeFirst },
+      ...{ fetched, open, shown, waitSaveFailed: saveRefused },
       save: async () => {
         await typeAndSave(page, ext, saved, session.timeout);
         return observe(await readUntil(read, saved, session.timeout));
@@ -612,7 +632,7 @@ async function rewriteCase(
     forgotten: await forgottenRecord(lane, held.key, `(rewrite ${id})`),
   };
   const seen = `Office rewrite ${id}, observed ${JSON.stringify(caseLine(evidence))}`;
-  expect(rewriteFacts(evidence), seen).toEqual(EXPECTED_REWRITE[id]);
+  expect(rewriteFacts(evidence, closedPinned), seen).toEqual(EXPECTED_REWRITE[id]);
   const shots = ['open', ...(typeFirst ? ['typed'] : []), 'saved'].map((at) => `${shot}-${at}.png`);
   expect(editor.screenshots, seen).toEqual(shots);
   return evidence;
@@ -818,17 +838,18 @@ async function typingCase(
 }
 
 /**
- * 18.7 (#442): with A's DOCX open in ONLYOFFICE, clean or with an unsaved edit, and then a clean
- * XLSX and PPTX (#657 A4), the Agent's `bash` rewrites the same file: python-docx for the DOCX, a
- * stdlib zipfile part rewrite for the others. The editor refreshes to the Agent's version, awaited
- * up to a session timeout with its arrival recorded; a clean case shows no plugin notice, the
- * unsaved one drops its edit and shows 「保存未写回文件」 until A's save lands, still at the instant
- * before it. A then types and saves, no notice or refresh comes in the quiet window after the
- * save's clear, and the file holds both sides' text, with no copy left in `/data/work`, still after
- * the editor closes (#657 A). The DOCX typing case (#652) follows: with the rewrite in its window,
- * the editor refreshes once it turns clean, and A's next save holds both sides' text. Each case
- * records and then removes the forgotten copy its open key left (#650); a case failing once that
- * key was read clears it after `settle` and rethrows its own failure.
+ * 18.7 (#442): with A's DOCX open in ONLYOFFICE, clean or with an unsaved edit, then a clean XLSX
+ * and PPTX (#657 A4) and an unsaved XLSX and PPTX (#716), the Agent's `bash` rewrites the same
+ * file: python-docx for the DOCX, a stdlib zipfile part rewrite for the others. The editor
+ * refreshes to the Agent's version, awaited up to a session timeout with its arrival recorded; a
+ * clean case shows no plugin notice, an unsaved one drops its edit and shows 「保存未写回文件」 until
+ * A's save lands, still at the instant before it. A then types and saves, no notice or refresh
+ * comes in the quiet window after the save's clear, and the file holds both sides' text, with no
+ * copy left in `/data/work`, still after the editor closes (#657 A), which rewrote the saved file
+ * (#716). The DOCX typing case (#652) follows: with the rewrite in its window, the editor
+ * refreshes once it turns clean, and A's next save holds both sides' text. Each case records and
+ * then removes the forgotten copy its open key left (#650); a case failing once that key was read
+ * clears it after `settle` and rethrows its own failure.
  */
 export const officeRewriteScenario = (
   lane: OfficeRewriteLane,
@@ -843,8 +864,8 @@ export const officeRewriteScenario = (
       const start = await lane.provider();
       const configured = [start.rewriteCalls, start.rewriteHits];
       expect(configured, 'Rewrite scripts configured').toEqual([
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
       ]);
       const root = join(lane.session.directory, 'office-rewrite');
       const cleared = <T>(id: string, body: (held: ForgottenKey) => Promise<T>) =>
@@ -853,7 +874,12 @@ export const officeRewriteScenario = (
       const unsaved = await cleared('unsaved', (held) => rewriteCase(lane, 1, root, held));
       const xlsx = await cleared('xlsx', (held) => rewriteCase(lane, 2, root, held));
       const pptx = await cleared('pptx', (held) => rewriteCase(lane, 3, root, held));
+      const unsavedXlsx = await cleared('unsaved-xlsx', (held) => rewriteCase(lane, 4, root, held));
+      const unsavedPptx = await cleared('unsaved-pptx', (held) => rewriteCase(lane, 5, root, held));
       const typing = await cleared('typing', (held) => typingCase(lane, root, since, held));
-      return { clean, unsaved, xlsx, pptx, typing };
+      return {
+        ...{ clean, unsaved, xlsx, pptx, typing },
+        ...{ 'unsaved-xlsx': unsavedXlsx, 'unsaved-pptx': unsavedPptx },
+      };
     },
   );

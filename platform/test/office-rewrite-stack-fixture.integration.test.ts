@@ -94,16 +94,19 @@ it('scripts one rewrite per case file, each with its own marker and nonce', () =
 
   const fresh = ownedRewrites().map(({ nonce }) => nonce);
 
-  const names = ['干净改写.docx', '未保存改写.docx', '干净改写.xlsx', '干净改写.pptx'];
+  const names = [
+    ...['干净改写.docx', '未保存改写.docx', '干净改写.xlsx', '干净改写.pptx'],
+    ...['未保存改写.xlsx', '未保存改写.pptx'],
+  ];
   const commands = scripts.map(({ nonce }, index) => rewriteCommand(names[index] ?? '', nonce));
   expect(scripts.map(({ command }) => command)).toEqual(commands);
-  expect(scripts).toHaveLength(4);
+  expect(scripts).toHaveLength(6);
   for (const { marker, nonce } of scripts) {
     expect(nonce).toMatch(new RegExp(`^${NONCE_PATTERN.source}$`));
     expect(marker).toMatch(/^stack-rewrite-[0-9a-f-]{36}$/);
   }
   const values = scripts.flatMap(({ marker, nonce }) => [marker, nonce]);
-  expect(new Set([...values, ...fresh]).size).toBe(12);
+  expect(new Set([...values, ...fresh]).size).toBe(18);
 });
 
 const BASE = 'http://127.0.0.1:64694';
@@ -158,6 +161,7 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
     { ...clean, file: 'x.xlsx' },
     { ...clean, file: 'p.pptx' },
   ];
+  const unsavedFormats = { 'unsaved-xlsx': unsaved, 'unsaved-pptx': unsaved };
 
   const shown = { staleChanged: false, staleRemoved: false, saveFailed: true };
   const typingObserved = {
@@ -179,7 +183,7 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
   } as const;
   const typing = { ...typingObserved, responses, editor };
 
-  const line = officeRewriteLine({ clean, unsaved, xlsx, pptx, typing });
+  const line = officeRewriteLine({ clean, unsaved, xlsx, pptx, typing, ...unsavedFormats });
 
   const printed = {
     ...observed,
@@ -200,6 +204,8 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
     clean: printed,
     unsaved: { ...printed, file: '未保存改写.docx', reads },
     ...{ xlsx: { ...printed, file: 'x.xlsx' }, pptx: { ...printed, file: 'p.pptx' } },
+    'unsaved-xlsx': { ...printed, file: '未保存改写.docx', reads },
+    'unsaved-pptx': { ...printed, file: '未保存改写.docx', reads },
     typing: { ...typingObserved, responses: printed.responses, editor: printed.editor },
   });
   for (const secret of [LONG_RUN, AGENT, 'token'])
@@ -212,7 +218,8 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
 const NO_COPY = { copies: 0, listed: false, cleared: true };
 const COPY = { copies: 1, listed: true, cleared: true };
 // §60's measured values (step 1 and review round 1), written out rather than read from the fixture;
-// #657 A's `atSave` and `quiet` flags are predictions, confirmed by the exact-head stack.
+// #657 A's `atSave` and `quiet` flags are predictions, confirmed by the exact-head stack. #716 item
+// 4's two stack runs: the close rewrote the saved file in every case (`closedRewrote`).
 const CLEAN = {
   notices: NOTICES,
   cleared: true,
@@ -221,6 +228,7 @@ const CLEAN = {
   arrived: { config: true, saveFailed: false },
   states: ['agent-only', 'both', 'both'],
   typed: [false, false, false],
+  closedRewrote: true,
   entries: { saved: unchanged, closed: unchanged },
   allowed: true,
   sessions: [quiet, quiet],
@@ -233,25 +241,35 @@ const UNSAVED = {
   ...{ ...CLEAN, notices: { ...NOTICES, saveFailed: REFUSED } },
   ...{ arrived: { config: true, saveFailed: true }, forgotten: COPY },
 };
-// #657 A4's prediction for the clean XLSX and PPTX cases, for the stack to confirm.
-const MEASURED = { clean: CLEAN, unsaved: UNSAVED, xlsx: CLEAN, pptx: CLEAN };
+// #657 A4's prediction for the clean XLSX and PPTX cases, confirmed by the stack; the unsaved XLSX
+// and PPTX cases as #716 item 4's two stack runs measured them, both equal to the unsaved DOCX.
+const MEASURED = {
+  ...{ clean: CLEAN, unsaved: UNSAVED, xlsx: CLEAN, pptx: CLEAN },
+  ...{ 'unsaved-xlsx': UNSAVED, 'unsaved-pptx': UNSAVED },
+};
 type Id = keyof typeof MEASURED;
+/** The cases typed into, unsaved, before the Agent turn. */
+const TYPED_FIRST: readonly Id[] = ['unsaved', 'unsaved-xlsx', 'unsaved-pptx'];
+/** Whether the case's refused save was measured: 「保存未写回文件」 latched after the Agent turn. */
+const refused = (id: Id) => MEASURED[id].arrived.saveFailed;
 const at = (state: 'agent-only' | 'both' | 'employee-only', typed?: boolean) => ({
   ...read,
   state,
   ...(typed === undefined ? {} : { typed }),
 });
+/** The three reads as measured: the close rewrote the saved file, its digest another. */
+const closedReads = (typed?: boolean) => ({
+  rewritten: at('agent-only', typed),
+  saved: at('both', typed),
+  closed: { ...at('both', typed), sha256: 'c'.repeat(64) },
+});
 const measured = (id: Id, overrides: object = {}) => {
-  const typed = id === 'unsaved' ? false : undefined;
+  const typed = TYPED_FIRST.includes(id) ? false : undefined;
   return {
     ...{ file: `${id}.docx`, provider: { rewriteCalls: 1, rewriteHits: 1, requests: 3 } },
     ...{ notices: MEASURED[id].notices, cleared: true, config: CLEAN.config, responses: [] },
-    arrived: { config: 250, saveFailed: id === 'unsaved' ? 250 : null },
-    reads: {
-      rewritten: at('agent-only', typed),
-      saved: at('both', typed),
-      closed: at('both', typed),
-    },
+    arrived: { config: 250, saveFailed: refused(id) ? 250 : null },
+    reads: closedReads(typed),
     entries: { saved: unchanged, closed: unchanged },
     ...{ allowed: true, editor: session([], ['sw'], []), agent: session(replies, [], []) },
     forgotten: MEASURED[id].forgotten,
@@ -261,19 +279,27 @@ const measured = (id: Id, overrides: object = {}) => {
 /** The ms from the Agent turn until the refetch and 「保存未写回文件」 arrived; null when they did not. */
 type Ms = number | null;
 const ms = (config: Ms, saveFailed: Ms) => ({ arrived: { config, saveFailed } });
-const typedReads = (typed: boolean) => ({
-  reads: {
-    rewritten: at('agent-only', typed),
-    saved: at('both', typed),
-    closed: at('both', typed),
-  },
-});
+const typedReads = (typed: boolean) => ({ reads: closedReads(typed) });
+/** The unsaved XLSX or PPTX case without its refused save: no 「保存未写回文件」 awaited or seen. */
+const unrefused = (id: Id) => measured(id, { notices: NOTICES, ...ms(250, null) });
+/** The close leaving the saved file as it was: equal saved and closed digests. */
+const SAVED_AS_CLOSED = { rewritten: at('agent-only'), saved: at('both'), closed: at('both') };
+const closedAsSaved = (id: Id) => measured(id, { reads: SAVED_AS_CLOSED });
 
 it.each([
   ['the clean case as measured', 'clean', measured('clean'), true],
   ['the unsaved case as measured', 'unsaved', measured('unsaved'), true],
   ['the XLSX case as predicted', 'xlsx', measured('xlsx'), true],
   ['the PPTX case as predicted', 'pptx', measured('pptx'), true],
+  ...(['unsaved-xlsx', 'unsaved-pptx'] as const).flatMap((id) => [
+    [`the ${id} case as measured`, id, measured(id), true] as const,
+    [`the ${id} save not refused`, id, unrefused(id), false] as const,
+    [`the ${id} case without a copy`, id, measured(id, { forgotten: NO_COPY }), false] as const,
+    [`the ${id} typed nonce kept`, id, measured(id, typedReads(true)), false] as const,
+  ]),
+  ...(['clean', 'unsaved', 'xlsx', 'pptx', 'unsaved-xlsx', 'unsaved-pptx'] as const).map(
+    (id) => [`the ${id} close not rewriting the file`, id, closedAsSaved(id), false] as const,
+  ),
   ['a PPTX save-failed bar', 'pptx', measured('pptx', { notices: UNSAVED.notices }), false],
   ['the typed nonce kept', 'unsaved', measured('unsaved', typedReads(true)), false],
   [
@@ -340,16 +366,14 @@ it.each([
   [
     'the saved file without the Agent text',
     'clean',
-    measured('clean', {
-      reads: { rewritten: at('agent-only'), saved: at('employee-only'), closed: at('both') },
-    }),
+    measured('clean', { reads: { ...closedReads(), saved: at('employee-only') } }),
     false,
   ],
   [
     'a late write after the close',
     'clean',
     measured('clean', {
-      reads: { rewritten: at('agent-only'), saved: at('both'), closed: at('agent-only') },
+      reads: { ...closedReads(), closed: { ...closedReads().closed, state: 'agent-only' } },
     }),
     false,
   ],
@@ -379,7 +403,13 @@ it.each([
   ],
 ] as const)('expects each case as §60 measured it: %s', (_case, id, evidence, exact) => {
   expect(EXPECTED_REWRITE).toEqual(MEASURED);
-  expect(JSON.stringify(rewriteFacts(evidence)) === JSON.stringify(MEASURED[id])).toBe(exact);
+  expect(JSON.stringify(rewriteFacts(evidence, true)) === JSON.stringify(MEASURED[id])).toBe(exact);
+});
+
+it('records an unpinned case whether its close rewrote the file as null, not asserted', () => {
+  const facts = rewriteFacts(closedAsSaved('unsaved-pptx'), false);
+
+  expect(facts).toEqual({ ...MEASURED['unsaved-pptx'], closedRewrote: null });
 });
 
 const after = (ms: number, act: () => unknown) => setTimeout(act, ms);
@@ -391,7 +421,7 @@ const after = (ms: number, act: () => unknown) => setTimeout(act, ms);
 const span = (id: Id, stand: StandIn, onSave?: () => unknown) =>
   noticeSpan(stand.page, {
     ...{ fetched: stand.fetched, open: 1, shown: flagsOf(new Set()) },
-    waitSaveFailed: id === 'unsaved',
+    waitSaveFailed: refused(id),
     save: () => {
       stand.hide('saveFailed');
       onSave?.();
@@ -403,7 +433,7 @@ const span = (id: Id, stand: StandIn, onSave?: () => unknown) =>
 type Span = Awaited<ReturnType<typeof span>>;
 /** What EXPECTED_REWRITE fixes of a case whose post-turn span the seam assembled. */
 const spanFacts = (id: Id, { notices, config, arrived, cleared }: Span) =>
-  rewriteFacts(measured(id, { notices, config, arrived, cleared }));
+  rewriteFacts(measured(id, { notices, config, arrived, cleared }), true);
 /** MEASURED[id] with one notice's one flag changed. */
 const flipped = (id: Id, notice: NoticeId, flag: keyof typeof unseen, value: boolean) => {
   const { notices } = MEASURED[id];
@@ -412,14 +442,14 @@ const flipped = (id: Id, notice: NoticeId, flag: keyof typeof unseen, value: boo
     notices: { ...notices, [notice]: { ...notices[notice], [flag]: value } },
   };
 };
-// The editor refetches its config, and the unsaved case's notice shows, soon after the turn.
+// The editor refetches its config, and a refused save's notice shows, soon after the turn.
 const refreshed = (stand: StandIn, id: Id) =>
   after(10, () => {
     stand.refresh();
-    if (id === 'unsaved') stand.show('saveFailed');
+    if (refused(id)) stand.show('saveFailed');
   });
 
-it.each(['clean', 'unsaved', 'xlsx', 'pptx'] as const)(
+it.each(['clean', 'unsaved', 'xlsx', 'pptx', 'unsaved-xlsx', 'unsaved-pptx'] as const)(
   'assembles the %s case as measured once its refresh and notice arrived',
   async (id) => {
     const stand = standIn();
@@ -429,8 +459,8 @@ it.each(['clean', 'unsaved', 'xlsx', 'pptx'] as const)(
 
     expect(spanFacts(id, result)).toEqual(EXPECTED_REWRITE[id]);
     expect(result.arrived.config).toBeGreaterThanOrEqual(10);
-    // Awaited only in the unsaved case, where it shows with the refetch.
-    if (id === 'unsaved') expect(result.arrived.saveFailed).toBeGreaterThanOrEqual(10);
+    // Awaited only where the save was refused, where it shows with the refetch.
+    if (refused(id)) expect(result.arrived.saveFailed).toBeGreaterThanOrEqual(10);
     else expect(result.arrived.saveFailed).toBeNull();
     expect(result.afterSave).toEqual(at('both'));
   },
@@ -577,7 +607,7 @@ const MEASURED_TYPING = {
   entries: { saved: unchanged, closed: unchanged },
   allowed: true,
   forgotten: COPY,
-  // #716, as the stack on b35c876 measured it: no notice in the quiet window.
+  // #716, as #737's stack runs measured it: no notice in the quiet window.
   quietWindow: NONE,
 };
 const typingReads = (saved: 'agent-only' | 'both') => ({
@@ -792,6 +822,7 @@ const KEY = 'e5'.repeat(32);
 const SOCKET = `${BASE}/doc/${KEY}/c/?EIO=4&transport=polling`;
 const reply = (value: unknown) => Promise.resolve(JSON.stringify(value));
 const fresh = { size: 9, sha256: 'a'.repeat(64) };
+const SIX_ZEROS = [0, 0, 0, 0, 0, 0];
 /** A's instance as the rewrite lane drives it before and after the clean case's browser session. */
 const rewriteLane = {
   session: { base: BASE, directory: DIR, email: 'a@x.test', password: 'p', timeout: 500 },
@@ -813,8 +844,7 @@ const rewriteLane = {
     );
   },
   namespaceRead: () => Promise.reject(new Error('no namespace read before the session closes')),
-  provider: () =>
-    Promise.resolve({ rewriteCalls: [0, 0, 0, 0], rewriteHits: [0, 0, 0, 0], requests: 0 }),
+  provider: () => Promise.resolve({ rewriteCalls: SIX_ZEROS, rewriteHits: SIX_ZEROS, requests: 0 }),
   ...{ instance: 'dsh-team-u-a', reply: 'reply', rewrites: ownedRewrites() },
 };
 

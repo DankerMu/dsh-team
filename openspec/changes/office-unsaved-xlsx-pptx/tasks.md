@@ -22,12 +22,12 @@
 
 ## 1. Implementation
 
-- [ ] 1.1 Measure.
+- [x] 1.1 Measure.
   - Add the two cases with `waitSaveFailed: true`.
   - Add uncommitted instrumentation that prints `rewriteFacts`, the saved and closed digests, and the nonce reads for every case, and switch `:615` and `:617` to `expect.soft` for these runs only.
   - Run `pnpm test:stack` twice. Record the raw facts of both runs, and apply the stop rule.
   - Remove the instrumentation.
-- [ ] 1.2 Pin.
+- [x] 1.2 Pin.
   - Set `saveRefused` per case.
   - Switch the typed check to `heldApart`.
   - Add `closedRewrote` to `rewriteFacts`: `true` for the four existing cases, measured for the new ones, `null` where the two runs disagree.
@@ -36,12 +36,12 @@
   - Update the provider script count, the ledger table, `Sum:` and `testTimeout`.
   - Update `docs/LOCAL_STACK.md` and `platform/test/README.md`.
   - Restate the two `b35c876` comments.
-- [ ] 1.3 Integration.
+- [x] 1.3 Integration.
   - `measured()` and the stand-in key on `saveRefused` and `typeFirst`.
   - The shape comparison covers the new ids.
   - Add the mutants for the save outcome, the forgotten copy and `closedRewrote` (equal digests), each red against its pinned expectation.
 
 ## 2. Verification
 
-- [ ] 2.1 Run `pnpm test:integration`, `pnpm typecheck`, `pnpm lint`, `pnpm dead-code` and `pnpm duplicate-code`.
+- [x] 2.1 Run `pnpm test:integration`, `pnpm typecheck`, `pnpm lint`, `pnpm dead-code` and `pnpm duplicate-code`.
 - [ ] 2.2 Run one green `pnpm test:stack` on the final head, then the exact-head trusted VPS `pnpm test:docker` and `pnpm test:deploy`.
