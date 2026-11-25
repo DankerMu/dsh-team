@@ -32,9 +32,9 @@ Issue #715. Line numbers refer to main `a4efa57`. In each item below, a PR gate 
 - **#5.**
   - In range mode, `check-naming.sh` checks the **union** of two path sets:
     - the existing net diff (`base...head`, `--diff-filter=AR`);
-    - every commit's own added or renamed paths: `git log -z --format= --name-only --diff-filter=AR --end-of-options "$base..$head" --`.
-  - The union matters because `git log` prints no diff for a merge commit. Using `git log` alone would lose a path that only a merge adds, which the net diff catches today.
-  - `--diff-merges=first-parent` is not used. A merge of main into the branch would re-list main's paths.
+    - every commit's own added or renamed paths: `git log -z --format= --name-only --diff-filter=AR --diff-merges=dense-combined --end-of-options "$base..$head" --`.
+  - A merge commit is listed by its dense combined diff. With `--diff-filter=AR`, a path is kept only when it is added or renamed against every parent. So a path that an evil merge adds itself is seen, even after a later commit deletes or renames it, and a clean sync merge of main contributes nothing. (Review round 1 found this. The first draft relied on the net diff for merge paths, which misses a merge-added path that is later deleted.)
+  - `--diff-merges=first-parent` and `-m` are not used. Both re-list main's paths for a merge of main into the branch.
   - Staged mode and path mode are unchanged.
 - **#6.** Recorded only; no change.
 - **#7.** `check-pr-range.sh` rejects `base == head` as `lint:pr: unreadable range` (exit 2) before it calls commitlint.

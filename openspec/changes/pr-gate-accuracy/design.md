@@ -63,6 +63,8 @@
 - **#5.**
   - One commit adds `tmp/x.md` and the next deletes it. The range is rejected with the scratch reason; the old check accepted it.
   - A path added only inside a merge commit is still rejected, both before and after the change.
+  - A merge adds `wip/x.md` and a later commit deletes it; a merge adds `tmp/evil.md` and a later commit renames it. Both are rejected; the old check accepted both.
+  - A clean sync merge of the base is accepted.
   - All existing `range_*` cases stay green.
 - **#7.** `pnpm lint:pr X X` exits 2 with `lint:pr: unreadable range`. The old run printed commitlint usage.
 

@@ -24,7 +24,7 @@ Write each guardrail case first, run it against the unchanged code, and record i
 - [x] 1.1 #1/#2: add `scripts/pr-diff-lines.sh` (fail-closed) and change the CI step to `HEAD^1 HEAD^2`, requiring `HEAD^2`. Add the step-text cases in a merge fixture: exact count, stale base, non-merge `HEAD` fails, label `if:`. Add script cases: binary, wrong argument count, unresolvable ref. Update `constraints.yaml` `enforced_by`.
 - [x] 1.2 #3: change the CI step to write `-z` output to a temporary file and pass it as stdin. Make `docs-only-diff.sh` read NUL-delimited input. Switch the `docs_only()` helper to NUL-delimited output. Add two `scope_case` cases: non-ASCII, and three paths in git order doc, code, doc (`docs/a.md`, `platform/x.ts`, `z.md`). Push mode in the same step must use the same input form.
 - [x] 1.3 #4: add the narrow `ignores` entry to `commitlint.config.cjs`. Add guardrail cases: #612's real message accepted; the same subject without the trailer rejected; the trailer on a non-Dependabot subject rejected; a bad type rejected.
-- [x] 1.4 #5: make range-mode naming check the union of the net diff and each commit's added and renamed paths. Add the add-then-delete case and the merge-only-path case, and re-check every existing `range_*` case.
+- [x] 1.4 #5: make range-mode naming check the union of the net diff and each commit's added and renamed paths. Add the add-then-delete, merge-then-delete, merge-then-rename and clean-sync-merge cases, and the merge-only-path case, and re-check every existing `range_*` case.
 - [x] 1.5 #7: make `base == head` an unreadable range. Add the guardrail case.
 - [x] 1.6 Document the new script and cases in `scripts/README.md`, and change its classifier input line (`:90`) to `git diff -z`.
 
