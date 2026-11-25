@@ -69,7 +69,8 @@ export const removeForgotten = (lane: StoreLane, key: string, label: string) =>
 
 /** In the Document Server (python3; no node): each store entry's shape, oldest first. A 64-hex run
  * in any name prints as `<hex64>`; only the key's digest is in the script, and stderr (a traceback
- * would quote a path) goes to /dev/null. */
+ * would quote a path) goes to /dev/null. An entry gone between the listing and its inspection, as
+ * a closing session's copy can be, is absent; any other error still fails the script. */
 const shapePy = (digest: string | null) => `import hashlib, json, os, re, sys, time
 sys.stderr = open(os.devnull, 'w')
 root, digest = sys.argv[1], ${digest === null ? 'None' : `'${digest}'`}
@@ -78,11 +79,15 @@ name_digest = lambda name: hashlib.sha256(name.encode('utf-8', 'surrogateescape'
 entries = []
 for name in os.listdir(root) if os.path.isdir(root) else []:
     path = os.path.join(root, name)
-    inside = os.path.isdir(path) and not os.path.islink(path)
+    try:
+        inside = os.path.isdir(path) and not os.path.islink(path)
+        files = sorted(HEX.sub('<hex64>', f) for f in os.listdir(path)) if inside else []
+        age = round(time.time() - os.lstat(path).st_mtime)
+    except FileNotFoundError:
+        continue
     entries.append({'hex64': HEX.fullmatch(name) is not None, 'length': len(name),
         'matchesKey': digest is not None and name_digest(name) == digest, 'dir': inside,
-        'files': sorted(HEX.sub('<hex64>', f) for f in os.listdir(path)) if inside else [],
-        'ageSeconds': round(time.time() - os.lstat(path).st_mtime)})
+        'files': files, 'ageSeconds': age})
 entries.sort(key=lambda entry: -entry['ageSeconds'])
 print(json.dumps({'entries': entries}))`;
 

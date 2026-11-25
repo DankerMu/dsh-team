@@ -36,7 +36,12 @@ import {
   watchSignal,
   windowFacts,
 } from './office-rewrite-observers.ts';
-import type { FrameRecord, NoticeTimes, WatchRecord } from './office-rewrite-observers.ts';
+import type {
+  FrameRecord,
+  NoticeTimes,
+  WatchRecord,
+  WindowMarks,
+} from './office-rewrite-observers.ts';
 import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 import { converseInWorkbench, scrubEach, workbenchSession } from './stack-browser-fixture.ts';
@@ -123,6 +128,8 @@ const SAVE_FAILED = { ...NONE_SHOWN, saveFailed: true };
  * save landed (one `saved`), and no notice showed after it; one `change`, one `save-error`, no
  * refresh request; the file the Agent's after the rewrite and both sides' after the save and the
  * close, the in-window typing in no read; no new or missing work entry; 18.5's allowed errors.
+ * #716's prediction, for the exact-head stack to confirm: no notice in the quiet window after the
+ * clear.
  */
 export const EXPECTED_TYPING = {
   notices: { before: NONE_SHOWN, window: SAVE_FAILED, saved: NONE_SHOWN, end: NONE_SHOWN },
@@ -136,6 +143,7 @@ export const EXPECTED_TYPING = {
   entries: { saved: NO_ENTRIES, closed: NO_ENTRIES },
   allowed: true,
   forgotten: COPY,
+  quietWindow: NONE_SHOWN,
 };
 
 /** The provider's rewrite scripts, one per case in order; every value is a nonsecret nonce. */
@@ -218,6 +226,8 @@ interface TypingEvidence extends EditedEvidence {
   readonly latched: NoticePoints<'window' | 'end'>;
   /** No notice shown within a session timeout after the save poll. */
   readonly cleared: boolean;
+  /** Each notice seen in the quiet window after the clear, with the latch re-armed at its start. */
+  readonly quietWindow: NoticeFlags;
   readonly config: Readonly<Record<'open' | 'window' | 'saved' | 'end', number>>;
   /** (a)(b) The dirty transitions and refresh requests. */
   readonly dirty: ReturnType<typeof frameSignal>;
@@ -269,12 +279,12 @@ type TypingFactsInput = Pick<
   TypingEvidence,
   'notices' | 'latched' | 'cleared' | 'config' | 'dirty' | 'watch' | 'reads' | 'entries'
 > &
-  Pick<TypingEvidence, 'allowed' | 'forgotten'> & { readonly window: StaleSpan };
+  Pick<TypingEvidence, 'allowed' | 'forgotten' | 'quietWindow'> & { readonly window: StaleSpan };
 
 /** What EXPECTED_TYPING fixes of the typing case; times, the host log and digests stay evidence. */
 export function typingFacts(evidence: TypingFactsInput) {
-  const { notices, latched, cleared, config, dirty, watch, reads, entries, allowed, forgotten } =
-    evidence;
+  const { notices, latched, cleared, config, dirty, watch, reads, entries, allowed } = evidence;
+  const { forgotten, quietWindow } = evidence;
   return {
     ...{ notices, latched: { window: latched.window }, cleared, config },
     dirty: dirty.available
@@ -285,7 +295,7 @@ export function typingFacts(evidence: TypingFactsInput) {
         }
       : { available: false },
     watch: watch.available ? { available: true, kinds: watch.kinds } : { available: false },
-    ...{ ...readFacts(reads), entries, allowed, forgotten },
+    ...{ ...readFacts(reads), entries, allowed, forgotten, quietWindow },
   };
 }
 
@@ -352,7 +362,7 @@ export const NOTICE_LATCH = `(() => {
   new MutationObserver(check).observe(document, { childList: true, subtree: true, characterData: true });
 })()`;
 export const NOTICES_SEEN = '({ ...window.__dshTeamNotices })';
-const NOTICE_TIMES = '({ ...window.__dshTeamNoticeTimes })';
+export const NOTICE_TIMES = '({ ...window.__dshTeamNoticeTimes })';
 const STALE_LATCHED = 'window.__dshTeamNotices.staleChanged === true';
 export const NOTICES_SHOWN = `Object.fromEntries(Object.entries(${JSON.stringify(NOTICES)}).map(([id, notice]) => [id, document.body.innerText.includes(notice)]))`;
 type NoticeFlags = Readonly<Record<string, boolean>>;
@@ -470,6 +480,18 @@ interface NoticeSteps<T> {
   readonly windowMs: number;
 }
 
+/** The latch re-armed, `during` run, a `windowMs` hold: what the latch saw in that quiet window. */
+async function quietAfter(
+  page: NoticePage,
+  windowMs: number,
+  during: () => Promise<unknown> = () => Promise.resolve(),
+) {
+  await page.evaluate(NOTICE_LATCH);
+  await during();
+  await delay(windowMs);
+  return page.evaluate<NoticeFlags>(NOTICES_SEEN);
+}
+
 /**
  * #657 A: from the Agent turn's `rewritten` read to the end of the editing session. The positives
  * (the refetch; 「保存未写回文件」 latched where awaited) are awaited up to `timeout`, their first
@@ -498,10 +520,7 @@ export async function noticeSpan<T>(page: NoticePage, steps: NoticeSteps<T>) {
   const afterSave = await steps.save();
   const savedLatch = await seen();
   const cleared = await heldWithin(noneShown(page), timeout);
-  await page.evaluate(NOTICE_LATCH);
-  await steps.afterCleared();
-  await delay(windowMs);
-  const quiet = await seen();
+  const quiet = await quietAfter(page, windowMs, steps.afterCleared);
   const config = { open, window, saved: fetched.config };
   const notices = noticeFlags(steps.shown, latched, atSave, savedLatch, quiet);
   return { notices, config, arrived, cleared, afterSave };
@@ -635,6 +654,54 @@ async function typeThroughRewrite(page: Page, lane: OfficeRewriteLane, nonces: N
   return { marks: { origin, execStart, execEnd: done.execEnd, lastKey }, latched: await latched() };
 }
 
+/** The typing case's window facts from the latch's stale-banner times and the frames' dirty false;
+ * read before any re-arm, which resets the times. */
+async function typingWindow(page: NoticePage, marks: WindowMarks) {
+  const times = await page.evaluate<Readonly<Record<string, NoticeTimes>>>(NOTICE_TIMES);
+  const stale = times.staleChanged ?? { shown: null, cleared: null };
+  return windowFacts(marks, stale, await page.evaluate<FrameRecord | null>(FRAMES_SEEN));
+}
+
+/** What the typing case's post-save segment needs: its marks and counts, the read until the save
+ * landed and what runs once the notices cleared. */
+interface TypingSave<T, A> {
+  readonly marks: WindowMarks;
+  readonly savedAt: number;
+  readonly fetched: { readonly config: number };
+  /** Reads until the save landed. */
+  readonly landed: () => Promise<T>;
+  /** The listing, host log, watch and screenshot once the notices cleared. */
+  readonly afterCleared: () => Promise<A>;
+  readonly timeout: number;
+  readonly windowMs: number;
+}
+
+/**
+ * #652's typing case once its save was typed: the read until it landed, the notices then and their
+ * clear; at the end the notices, the latch since typing began, the window's times and the dirty
+ * transitions, all read before the latch is re-armed, which resets its times; then, as noticeSpan,
+ * the quiet window after the clear (#716).
+ */
+export async function typingSaved<T, A>(page: NoticePage, steps: TypingSave<T, A>) {
+  const { marks, fetched, timeout } = steps;
+  const shown = () => page.evaluate<NoticeFlags>(NOTICES_SHOWN);
+  const saved = await steps.landed();
+  const [savedShown, savedConfig] = [await shown(), fetched.config];
+  const cleared = await heldWithin(noneShown(page), timeout);
+  const after = await steps.afterCleared();
+  const end = { shown: await shown(), latched: await page.evaluate<NoticeFlags>(NOTICES_SEEN) };
+  const config = { saved: savedConfig, end: fetched.config };
+  const window = await typingWindow(page, marks);
+  const frames = await page.evaluate<FrameRecord | null>(FRAMES_SEEN);
+  const dirty = frameSignal(frames, marks.origin, steps.savedAt);
+  const quietWindow = await quietAfter(page, steps.windowMs);
+  return {
+    ...{ saved, after, cleared, config, window, dirty, quietWindow },
+    notices: { saved: savedShown, end: end.shown },
+    latched: { end: end.latched },
+  };
+}
+
 interface TypingSteps {
   readonly lane: OfficeRewriteLane;
   readonly nonces: Nonces;
@@ -662,14 +729,8 @@ async function typingBrowse(
   const before = await listing(lane);
   const [open, beforeShown] = [fetched.config, await shown()];
   const { marks, latched } = await typeThroughRewrite(page, lane, steps.nonces);
-  const frames = () => page.evaluate<FrameRecord | null>(FRAMES_SEEN);
-  const facts = async () => {
-    const times = await page.evaluate<Readonly<Record<string, NoticeTimes>>>(NOTICE_TIMES);
-    const stale = times.staleChanged ?? { shown: null, cleared: null };
-    return windowFacts(marks, stale, await frames());
-  };
   const missed = `Office rewrite typing: stale banner not latched within the window, (a)`;
-  expect(latched, `${missed} ${JSON.stringify(await facts())}`).toBe(true);
+  expect(latched, `${missed} ${JSON.stringify(await typingWindow(page, marks))}`).toBe(true);
   const rewritten = observe(await read());
   await delay(OBSERVE_MS);
   const held = { shown: await shown(), latched: await page.evaluate<NoticeFlags>(NOTICES_SEEN) };
@@ -677,20 +738,25 @@ async function typingBrowse(
   await shoot(`${shot}-window`);
   const savedAt = Date.now();
   await typeAndSave(page, 'docx', steps.nonces.saved, timeout);
-  const saved = { read: observe(await readUntil(read, steps.nonces.saved, timeout)) };
-  const [savedShown, savedConfig] = [await shown(), fetched.config];
-  const cleared = await heldWithin(noneShown(page), timeout);
-  const entries = { saved: entryDiff(before, await listing(lane)) };
-  const hostBefore = saveLines(await hostLog(lane, marks.origin), marks.origin);
-  const watch = watchSignal(await page.evaluate<WatchRecord | null>(WATCH_SEEN), marks.origin);
-  await shoot(`${shot}-saved`);
+  const span = await typingSaved(page, {
+    ...{ marks, savedAt, fetched, timeout, windowMs: OBSERVE_MS },
+    landed: async () => observe(await readUntil(read, steps.nonces.saved, timeout)),
+    afterCleared: async () => {
+      const entries = { saved: entryDiff(before, await listing(lane)) };
+      const hostBefore = saveLines(await hostLog(lane, marks.origin), marks.origin);
+      const watch = watchSignal(await page.evaluate<WatchRecord | null>(WATCH_SEEN), marks.origin);
+      await shoot(`${shot}-saved`);
+      return { entries, hostBefore, watch };
+    },
+  });
+  const { saved, after, notices, latched: end } = span;
   return {
-    ...{ before, origin: marks.origin, rewritten, saved: saved.read, entries, hostBefore },
-    notices: { before: beforeShown, window: held.shown, saved: savedShown, end: await shown() },
-    latched: { window: held.latched, end: await page.evaluate<NoticeFlags>(NOTICES_SEEN) },
-    config: { ...config, saved: savedConfig, end: fetched.config },
-    ...{ cleared, window: await facts(), watch },
-    dirty: frameSignal(await frames(), marks.origin, savedAt),
+    ...{ before, origin: marks.origin, rewritten, saved, ...after },
+    notices: { before: beforeShown, window: held.shown, ...notices },
+    latched: { window: held.latched, ...end },
+    config: { ...config, ...span.config },
+    ...{ cleared: span.cleared, window: span.window, dirty: span.dirty },
+    quietWindow: span.quietWindow,
   };
 }
 
