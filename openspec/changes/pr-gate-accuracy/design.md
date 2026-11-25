@@ -53,7 +53,7 @@
 - **Label exemption.** The extracted step's `if:` still contains `diff-limit-exempt`.
 - **#3, `scope_case`.**
   - `docs/笔记.md` alone gives `docs_only=true`. The old run printed `evidence required: "docs/\347…md"`.
-  - `docs/a.md`, `platform/x.ts` and `z.md` give `evidence required: platform/x.ts` and an empty `GITHUB_OUTPUT`. Git emits them as doc, code, doc, and the old reader judged that docs-only on bash 3.2 and bash 5. This case guards the NUL reader; a single-path case cannot.
+  - `docs/a.md`, `platform/x.ts` and `z.md` give `evidence required: platform/x.ts` and an empty `GITHUB_OUTPUT`. Git emits them as doc, code, doc. The old line reader, given this NUL stream (the half-changed state: `-z` in the step, the old reader in the classifier), judged it docs-only on bash 3.2 and bash 5. On fully unchanged code the step is newline-delimited, so the case is green there. This case guards the NUL reader; a single-path case cannot.
   - After `docs_only()` switches to `printf '%s\0'`, every existing classifier case keeps its result.
 - **#4.**
   - commitlint rejects `build(deps): Bump x from 1 to 2` with no trailer, on `subject-case`.

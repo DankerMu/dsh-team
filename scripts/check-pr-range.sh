@@ -2,8 +2,9 @@
 # scripts/check-pr-range.sh <base> <head> — `pnpm lint:pr`, the CI layer of the
 # commit-message and naming gates (#665). It lints only the range's own commits
 # (commitlint over base..head) and the paths it adds or renames
-# (check-naming.sh --range: net base...head plus each base..head commit), so
-# history before the base is never re-checked. An unreadable range, including
+# (check-naming.sh --range: net base...head plus each base..head commit, a
+# merge by its dense combined diff), so history before the base is never
+# re-checked. An unreadable range, including
 # a base equal to the head, fails closed with a fixed reason; it is never
 # treated as empty. Must run on bare macOS (bash 3.2).
 set -u

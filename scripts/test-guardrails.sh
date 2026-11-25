@@ -524,17 +524,42 @@ range_add_delete() {
 }
 range_case range_add_delete expect_reject "PR range (adds then deletes tmp/x.md)" \
   "scratchpad directory:    tmp/x.md"
-# git log lists no paths for a merge commit; the net diff still names this one.
-range_merge_only() {
+# merge_adding <path>: a merge commit whose own resolution adds <path>.
+merge_adding() {
   range_commit "docs(repo): add a side note" docs/guardrails-side.md || return 1
   side="$(git rev-parse HEAD)" || return 1
   git reset --quiet --hard "$baseline" && range_commit "docs(repo): add a main note" docs/guardrails-main.md &&
     git -c user.name=guardrails -c user.email=guardrails@localhost \
-      merge --quiet --no-ff --no-commit "$side" >/dev/null 2>&1 && mkdir -p wip && printf 'fixture\n' >wip/x.md &&
-    git add wip/x.md && fixture_commit "Merge branch 'side'"
+      merge --quiet --no-ff --no-commit "$side" >/dev/null 2>&1 && mkdir -p "$(dirname "$1")" &&
+    printf 'fixture\n' >"$1" && git add -- "$1" && fixture_commit "Merge branch 'side'"
 }
+# Only a merge adds wip/x.md; the net diff and the merge's dense combined diff name it.
+range_merge_only() { merge_adding wip/x.md; }
 range_case range_merge_only expect_reject "PR range (only a merge adds wip/x.md)" \
   "scratchpad directory:    wip/x.md"
+# The dense combined diff names what a merge itself adds, so a later commit
+# deleting or renaming that path does not hide it.
+range_merge_delete() {
+  merge_adding wip/x.md && git rm --quiet wip/x.md && fixture_commit "docs(repo): drop the merge note"
+}
+range_case range_merge_delete expect_reject "PR range (a merge adds wip/x.md, a later commit deletes it)" \
+  "scratchpad directory:    wip/x.md"
+range_merge_rename() {
+  merge_adding tmp/evil.md && git mv tmp/evil.md clean.md && fixture_commit "docs(repo): rename the merge note"
+}
+range_case range_merge_rename expect_reject "PR range (a merge adds tmp/evil.md, a later commit renames it)" \
+  "scratchpad directory:    tmp/evil.md"
+# A clean sync merge of the base adds no merge-side path: the base's own
+# tmp/old.md is not the PR's.
+range_sync_merge() {
+  range_commit "docs(repo): add a pr note" docs/guardrails-pr.md || return 1
+  pr_tip="$(git rev-parse HEAD)" || return 1
+  git reset --quiet --hard "$baseline" && range_commit "docs(repo): add a base note" tmp/old.md &&
+    range_base="$(git rev-parse HEAD)" && git reset --quiet --hard "$pr_tip" &&
+    git -c user.name=guardrails -c user.email=guardrails@localhost \
+      merge --quiet --no-ff -m "Merge branch 'main'" "$range_base" >/dev/null
+}
+range_case range_sync_merge expect_accept "PR range (a clean sync merge of the base)"
 
 # Base history holds an overlong subject and a forbidden path; the range modifies
 # that path (M), merges a side commit under a default-ignored message, and conforms.
@@ -655,11 +680,12 @@ size_case "diff size counts dash-leading and blank lines" size_dash "$size_line:
 size_case "diff size ignores a stale payload base" size_stale "$size_line: 3 (limit: $size_limit)"
 size_case "diff size fails when HEAD is not a merge" size_flat "fail:HEAD is not a two-parent merge"
 size_case "diff size fails on an octopus HEAD" size_octopus "fail:HEAD is not a two-parent merge"
-if grep -qF "contains(github.event.pull_request.labels.*.name, 'diff-limit-exempt')" "$tmp/size-if"; then
+size_if="\${{ !contains(github.event.pull_request.labels.*.name, 'diff-limit-exempt') }}"
+if [ "$(cat "$tmp/size-if")" = "$size_if" ]; then
   echo "PASS  diff size step is still skipped by the diff-limit-exempt label"
   pass=$((pass + 1))
 else
-  echo "FAIL  diff size step if: no longer names diff-limit-exempt: $(cat "$tmp/size-if")"
+  echo "FAIL  diff size step if: is \"$(cat "$tmp/size-if")\", want \"$size_if\""
   fail=$((fail + 1))
 fi
 # The script itself: binary files count 0; anything uncountable fails with its

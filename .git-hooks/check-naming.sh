@@ -5,8 +5,9 @@
 #   <path>                 one path (agent write-time check), exit 2 on violation;
 #   (no arguments)         the staged index, from .husky/pre-commit, exit 1;
 #   --range <base> <head>  paths base...head adds or renames, plus every path any
-#                          base..head commit adds or renames (a later deletion
-#                          does not hide it), from CI through
+#                          base..head commit adds or renames, a merge by its
+#                          dense combined diff (a later deletion or rename does
+#                          not hide it), from CI through
 #                          scripts/check-pr-range.sh (`pnpm lint:pr`), exit 1.
 # .git-hooks/ is not a hooks directory: core.hooksPath stays husky's .husky/_.
 #
@@ -129,10 +130,12 @@ changed="$(mktemp)" || exit 2
 trap 'rm -f "$changed"' EXIT
 if [ "${1:-}" = "--range" ]; then
   # The union (#715): `git log` lists each commit's own paths, so a path added and
-  # later deleted inside the range is still seen, but it lists none for a merge
-  # commit; the net diff still names paths only a merge adds.
+  # later deleted or renamed inside the range is still seen. A merge lists its
+  # dense combined diff: only paths matching neither parent, i.e. what the merge
+  # itself adds, never what a clean sync merge brings in from the base.
   if ! git diff -z --name-only --diff-filter=AR --end-of-options "$range" -- >"$changed" ||
-    ! git log -z --format= --name-only --diff-filter=AR --end-of-options "$2..$3" -- >>"$changed"; then
+    ! git log -z --format= --name-only --diff-filter=AR --diff-merges=dense-combined \
+      --end-of-options "$2..$3" -- >>"$changed"; then
     echo "check-naming.sh: unreadable range $range" >&2
     exit 2
   fi
