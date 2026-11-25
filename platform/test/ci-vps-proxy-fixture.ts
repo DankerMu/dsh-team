@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { networkRegistration } from '../../scripts/probe-browser-network.mjs';
-import { caseSpawn } from './trusted-docker-fixture.ts';
+import { caseSpawn } from './case-budget-fixture.ts';
 
 // After the worker: its receipt and journal reads, the proxy worker's stop, the home's removal.
 const RESERVE_MS = 2000;

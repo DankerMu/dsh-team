@@ -12,7 +12,7 @@ import type { DatabaseHandle } from '../src/db/index.ts';
 import { startupBarrier, startupDaemon, startupUnixServer } from './container-start-fixture.ts';
 import type { StartupDaemon } from './container-start-fixture.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
-import { caseBudget } from './trusted-docker-fixture.ts';
+import { caseBudget } from './case-budget-fixture.ts';
 
 const mainPath = fileURLToPath(new URL('../src/main.ts', import.meta.url));
 // One observeStartup per case of this budget (#656): setup (its 5s signal) and the listener wait

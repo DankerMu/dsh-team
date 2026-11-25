@@ -9,7 +9,7 @@ import { createInstanceService } from '../src/orchestrator/index.ts';
 import type { DockerClient } from '../src/orchestrator/index.ts';
 import { startupOwnerFixture } from './container-start-fixture.ts';
 import { sessionCookieToken } from './auth-fixture.ts';
-import { caseBudget } from './trusted-docker-fixture.ts';
+import { caseBudget } from './case-budget-fixture.ts';
 
 export function instanceConfig(
   root: string,

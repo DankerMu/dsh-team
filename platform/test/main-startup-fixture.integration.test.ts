@@ -9,7 +9,7 @@ import {
   watchMainProcess,
 } from './main-startup-fixture.ts';
 import type { StartupObservation } from './main-startup-fixture.ts';
-import { caseBudget } from './trusted-docker-fixture.ts';
+import { caseBudget } from './case-budget-fixture.ts';
 
 // Each child announces readiness on stdout only after its SIGTERM handler is installed.
 const KEEP_ALIVE = 'const keep = setInterval(() => {}, 1000);';

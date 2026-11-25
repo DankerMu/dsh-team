@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { profileSeedOracle, profileSeedScript } from './profile-seed-fixture.ts';
-import { caseSpawn } from './trusted-docker-fixture.ts';
+import { caseSpawn } from './case-budget-fixture.ts';
 
 // One cold python3 observer that walks, hashes and stats a small tree (the complete case also
 // runs one stand-in node), under a loaded host; unloaded each case takes under 1.5s.

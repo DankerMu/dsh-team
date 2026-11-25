@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { processBirth } from '../../scripts/probe-browser-native.mjs';
 import { retireDescendants } from './browser-build-fixture.ts';
-import { caseBudget } from './trusted-docker-fixture.ts';
+import { caseBudget } from './case-budget-fixture.ts';
 
 // An owned child exits by itself after this, so a missed kill fails on its close, not the case
 // timeout; it outlasts the child's start, its birth and its observer (bound 3s) under load.

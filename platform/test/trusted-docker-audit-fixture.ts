@@ -12,8 +12,8 @@ import {
 } from '../../scripts/verification-submission-storage.mjs';
 import { record } from './container-start-docker-fixture.ts';
 import type { DockerCommand } from './docker-command.ts';
-import { caseSpawn } from './trusted-docker-fixture.ts';
-import type { CaseSpawn } from './trusted-docker-fixture.ts';
+import { caseSpawn } from './case-budget-fixture.ts';
+import type { CaseSpawn } from './case-budget-fixture.ts';
 
 // After a budgeted case's last child: its async assessments, journal reads, the root's removal.
 const RESERVE_MS = 2000;

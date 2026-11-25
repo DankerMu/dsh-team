@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { caseSpawn } from './trusted-docker-fixture.ts';
+import { caseSpawn } from './case-budget-fixture.ts';
 
 const entrypoint = fileURLToPath(new URL('./verify-docker-evidence.ts', import.meta.url));
 const HEAD = '1111111111111111111111111111111111111111';
