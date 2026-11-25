@@ -25,10 +25,10 @@
 
 Write each probe first and record its red output.
 
-- [ ] 1.1 Measure first.
+- [x] 1.1 Measure first.
   - Instrument `sendHttp` temporarily, without committing it. Run the seven gateway caller files and the three ragflow-proxy files five times at load ≥ 67, which is the acceptance band's upper edge (as #687 and slice 1 measured).
   - Record the largest successful send. Done: the max was 400.2 ms at load 67–85. `HTTP_SEND_MS` = 2500 ms (about 6×; 10× = 4002 ms does not fit, see proposal). Write the basis, the factor and the `HTTP_SEND_MS + HTTP_OBSERVATION_MS < 5000` sum into its comment.
-- [ ] 1.2 Phase-named `sendHttp` with the named override, the bounded close waits and the labelled `observeHttp`. Pass `HTTP_SEND_SLOW_MS` from `instance-idle.docker.test.ts` and the stream warmup. Probes go in the new sibling test, each red on main because the failure names no phase:
+- [x] 1.2 Phase-named `sendHttp` with the named override, the bounded close waits and the labelled `observeHttp`. Pass `HTTP_SEND_SLOW_MS` from `instance-idle.docker.test.ts` and the stream warmup. Probes go in the new sibling test, each red on main because the failure names no phase:
   - A peer that never answers. Main shows `Test timed out in 5000ms` or a bare `AbortError`. After, it shows `sendHttp <METHOD> <path>: response headers …`, well before 5 s.
   - Headers, then silence. After, the phase is `response body`.
   - A labelled observation that never settles. Main has no label in the message; after, the label is present.
@@ -41,5 +41,5 @@ Write each probe first and record its red output.
 
 ## 2. Verification
 
-- [ ] 2.1 Run `pnpm test:integration` 5 times in a row at load ≥ 13 and < 67, then `pnpm typecheck`, `pnpm lint`, `pnpm dead-code` and `pnpm duplicate-code`.
+- [x] 2.1 Run `pnpm test:integration` 5 times in a row at load ≥ 13 and < 67, then `pnpm typecheck`, `pnpm lint`, `pnpm dead-code` and `pnpm duplicate-code`.
 - [ ] 2.2 Exact-head trusted VPS `pnpm test:docker` (instance-idle on the named slow bound) and `pnpm test:deploy`.

@@ -10,7 +10,7 @@ import {
   connectActivityPeer,
   observeActivity,
 } from './gateway-activity-fixture.ts';
-import { observeHttp, reader, sendHttp } from './gateway-http-fixture.ts';
+import { HTTP_SEND_SLOW_MS, observeHttp, reader, sendHttp } from './gateway-http-fixture.ts';
 import { withDockerIdleInstance, waitDockerIdle } from './instance-idle-docker-fixture.ts';
 import type { DockerIdleContext } from './instance-idle-docker-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
@@ -231,6 +231,7 @@ it('the same platform session resumes a retired instance with its completed conv
           },
         },
         JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }),
+        HTTP_SEND_SLOW_MS,
       );
       expect(response.status).toBe(200);
       const envelope = record(JSON.parse(response.body.toString('utf8')));
@@ -372,16 +373,26 @@ it('the same platform session resumes a retired instance with its completed conv
     f.setNow(began + 60_000);
     await f.checkIdle();
     await expectIdleRetirement(f);
-    const waiting = await sendHttp(f.base, {
-      path: '/',
-      headers: { cookie, accept: 'text/html' },
-    });
+    const waiting = await sendHttp(
+      f.base,
+      {
+        path: '/',
+        headers: { cookie, accept: 'text/html' },
+      },
+      undefined,
+      HTTP_SEND_SLOW_MS,
+    );
     expect(waiting.status).toBe(302);
     expect(waiting.headers.location).toBe('/_platform/wait');
-    const stopped = await sendHttp(f.base, {
-      path: '/_platform/api/instance',
-      headers: { cookie },
-    });
+    const stopped = await sendHttp(
+      f.base,
+      {
+        path: '/_platform/api/instance',
+        headers: { cookie },
+      },
+      undefined,
+      HTTP_SEND_SLOW_MS,
+    );
     expect(stopped.status).toBe(200);
     expect(JSON.parse(stopped.body.toString('utf8'))).toEqual({
       status: 'stopped',
@@ -400,6 +411,7 @@ it('the same platform session resumes a retired instance with its completed conv
         },
       },
       '{}',
+      HTTP_SEND_SLOW_MS,
     );
     expect(starting.status).toBe(200);
     expect(JSON.parse(starting.body.toString('utf8'))).toEqual({
@@ -409,11 +421,16 @@ it('the same platform session resumes a retired instance with its completed conv
     // Retain the real fixture's independent 90-second authenticated-readiness deadline.
     const ready = AbortSignal.timeout(90_000);
     for (;;) {
-      const status = await sendHttp(f.base, {
-        path: '/_platform/api/instance',
-        headers: { cookie },
-        signal: ready,
-      });
+      const status = await sendHttp(
+        f.base,
+        {
+          path: '/_platform/api/instance',
+          headers: { cookie },
+          signal: ready,
+        },
+        undefined,
+        HTTP_SEND_SLOW_MS,
+      );
       expect(status.status).toBe(200);
       const state: unknown = JSON.parse(status.body.toString('utf8'));
       if (record(state).status === 'running') {
@@ -434,10 +451,15 @@ it('the same platform session resumes a retired instance with its completed conv
     expect(replacement.Image).toBe(f.lifecycle.imageId);
     expect(await mountMetadata(row.container_id)).toEqual(originalMounts);
     await f.verifyVolumes();
-    const homepage = await sendHttp(f.base, {
-      path: '/',
-      headers: { cookie, accept: 'text/html' },
-    });
+    const homepage = await sendHttp(
+      f.base,
+      {
+        path: '/',
+        headers: { cookie, accept: 'text/html' },
+      },
+      undefined,
+      HTTP_SEND_SLOW_MS,
+    );
     expect(homepage.status).toBe(200);
     expect(homepage.headers['content-type']).toContain('text/html');
     expect(homepage.headers['set-cookie']).toBeUndefined();
