@@ -2,6 +2,11 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { record } from './container-start-docker-fixture.ts';
+import {
+  INVOCATION_PATTERN,
+  readCustodyRecord,
+  validateTerminal,
+} from '../../scripts/trusted-docker-record.mjs';
 
 type Identity = Readonly<Record<string, unknown>>;
 
@@ -10,31 +15,47 @@ const UNPUBLISHED_COMMAND = '.run/unpublished-command.json';
 /** A case that writes this file under the fixture repository releases the held owner (#692). */
 export const UNPUBLISHED_COMMAND_RELEASE = '.run/unpublished-command-release';
 
-/**
- * The unpublished-command owner's preload fragment (#661). Only the owner (`own`) is held: once
- * its `pnpm test:docker` spawn returns, it publishes the command pid, then blocks until the
- * release file appears or 30s pass, so neither the spawn event nor child.json can follow before.
- * Its event loop is blocked inside spawn, so the release is polled synchronously in 50ms slices.
- */
-export const UNPUBLISHED_COMMAND_PRELOAD = `import {existsSync,mkdirSync,renameSync,writeFileSync} from 'node:fs';
-if(process.argv.includes('own')){
-  const unpublished=childProcess.spawn;
-  childProcess.spawn=(command,args,options)=>{
-    const child=unpublished(command,args,options);
-    if(command==='pnpm'&&args[0]==='test:docker'){
-      const path=new URL(${JSON.stringify(UNPUBLISHED_COMMAND)},import.meta.url);
-      mkdirSync(new URL('.run/',import.meta.url),{recursive:true});
-      writeFileSync(new URL(path.href+'.pending'),JSON.stringify({pid:child.pid}));
-      renameSync(new URL(path.href+'.pending'),path);
-      const release=new URL(${JSON.stringify(UNPUBLISHED_COMMAND_RELEASE)},import.meta.url);
+// Blocks the held owner's spawn until the release file appears or 30s pass. Its event loop is
+// blocked inside spawn, so the release is polled synchronously in 50ms slices.
+const HOLD_UNTIL_RELEASE = `const release=new URL(${JSON.stringify(UNPUBLISHED_COMMAND_RELEASE)},import.meta.url);
       for(const until=Date.now()+30000;!existsSync(release)&&Date.now()<until;)
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,50);
-    }
-    return child;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,50);`;
+
+/** An owner (`own`) preload fragment whose `pnpm test:docker` spawn is replaced by `held`. */
+const heldOwnerPreload = (
+  held: string,
+) => `import {existsSync,mkdirSync,renameSync,writeFileSync} from 'node:fs';
+if(process.argv.includes('own')){
+  const unheld=childProcess.spawn;
+  childProcess.spawn=(command,args,options)=>{
+    if(command!=='pnpm'||args[0]!=='test:docker')return unheld(command,args,options);
+    ${held}
   };
   syncBuiltinESMExports();
 }
 `;
+
+/**
+ * The unpublished-command owner's preload fragment (#661). Once its `pnpm test:docker` spawn
+ * returns, it publishes the command pid, then holds, so neither the spawn event nor child.json
+ * can follow before the release.
+ */
+export const UNPUBLISHED_COMMAND_PRELOAD =
+  heldOwnerPreload(`const child=unheld(command,args,options);
+    const path=new URL(${JSON.stringify(UNPUBLISHED_COMMAND)},import.meta.url);
+    mkdirSync(new URL('.run/',import.meta.url),{recursive:true});
+    writeFileSync(new URL(path.href+'.pending'),JSON.stringify({pid:child.pid}));
+    renameSync(new URL(path.href+'.pending'),path);
+    ${HOLD_UNTIL_RELEASE}
+    return child;`);
+
+/**
+ * The late-finish owner's preload fragment (#718). It holds before its command spawn, then
+ * spawns a missing executable: its launch fails, so it writes a settled result.json (no group
+ * was ever created) and exits without child.json.
+ */
+export const LATE_FINISH_PRELOAD = heldOwnerPreload(`${HOLD_UNTIL_RELEASE}
+    return unheld('dsh-team-fixture-missing-command',args,options);`);
 
 /** The command pid the held owner published, once its record is complete. */
 export function publishedCommand(repository: string) {
@@ -154,14 +175,40 @@ async function scannedCommand(pid: number, custody: UncapturedCustody) {
   }
 }
 
-/** The command an owner started: its receipt, or, while it is stopped, its scanned child. */
-async function boundCommand(owner: Identity, receipt: string, custody: UncapturedCustody) {
+/**
+ * Whether a gone owner's own result.json, validated for this invocation and its manifest, records
+ * a settled command: its group was observed absent after close, and a gone group cannot return.
+ */
+async function settledResult(root: string, invocation: unknown) {
+  if (typeof invocation !== 'string' || !INVOCATION_PATTERN.test(invocation)) return false;
+  const { digest } = await readCustodyRecord(join(root, 'manifest.json'));
+  const terminal: unknown = (await readCustodyRecord(join(root, 'result.json'))).value;
+  return validateTerminal(terminal, invocation, digest).command.settled;
+}
+
+type BoundCommand = { readonly finished: true } | { readonly child: Identity | undefined };
+
+/**
+ * The command an owner started: its receipt, or, while it is stopped, its scanned child. A gone
+ * owner without a receipt is bound only when its validated result.json records a settled command.
+ */
+async function boundCommand(
+  owner: Identity,
+  root: string,
+  invocation: unknown,
+  custody: UncapturedCustody,
+): Promise<BoundCommand> {
   const pid = Number(owner.pid);
   const stopped = custody.live(owner) && (await frozen(pid, custody));
+  const receipt = join(root, 'child.json');
   if (existsSync(receipt))
-    return Object.freeze({ ...record(record(JSON.parse(readFileSync(receipt, 'utf8'))).owner) });
-  if (!stopped) throw new UnidentifiedCommand('owner gone without receipt');
-  return scannedCommand(pid, custody);
+    return {
+      child: Object.freeze({ ...record(record(JSON.parse(readFileSync(receipt, 'utf8'))).owner) }),
+    };
+  if (stopped) return { child: await scannedCommand(pid, custody) };
+  // A missing, unreadable, invalid or unsettled result keeps the authority, as no result does.
+  if (await settledResult(root, invocation).catch(() => false)) return { finished: true };
+  throw new UnidentifiedCommand('owner gone without receipt');
 }
 
 /** The authority of an invocation whose start died before capture, read once its owner is gone. */
@@ -182,8 +229,9 @@ function observedLive(identity: Identity, custody: UncapturedCustody) {
 
 /**
  * Freeze an uncaptured invocation's owner, bind its command, then kill and settle the owner on
- * every path. Only a bound command or none started yields an authority, whose group the caller
- * settles after the owner; any other outcome retains it. The report names the outcome.
+ * every path. Only a bound command, none started, or a finished command yields an authority, whose
+ * group the caller settles after the owner; any other outcome retains it. The report names the
+ * outcome; `finished` marks the one that is not an authority-retained failure.
  */
 export async function claimUncaptured(root: string, custody: UncapturedCustody) {
   let report = 'command unidentified (cleanup failed)';
@@ -198,10 +246,11 @@ export async function claimUncaptured(root: string, custody: UncapturedCustody) 
   try {
     const launched = record(JSON.parse(readFileSync(join(root, 'launch.json'), 'utf8')));
     const owner = Object.freeze({ ...record(launched.owner) });
-    let child: Identity | undefined;
+    let bound: BoundCommand;
     try {
-      child = await boundCommand(owner, join(root, 'child.json'), freezing);
-      report = child ? `command ${String(child.pid)}` : 'no command started';
+      bound = await boundCommand(owner, root, launched.invocation, freezing);
+      if ('finished' in bound) report = 'command finished';
+      else report = bound.child ? `command ${String(bound.child.pid)}` : 'no command started';
     } catch (error) {
       if (!(error instanceof UnidentifiedCommand)) throw error;
       report = `command unidentified (${error.message})`;
@@ -219,7 +268,10 @@ export async function claimUncaptured(root: string, custody: UncapturedCustody) 
         throw error;
       });
     }
-    return { report, authority: uncapturedAuthority(root, owner, child) };
+    // Only a finished command, settled by its own owner, hands back its authority unreported.
+    if ('finished' in bound)
+      return { report, finished: true, authority: uncapturedAuthority(root, owner) };
+    return { report, authority: uncapturedAuthority(root, owner, bound.child) };
   } catch (failure) {
     return { report, failure };
   }

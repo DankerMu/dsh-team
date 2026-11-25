@@ -19,14 +19,14 @@ See design.md § Must preserve.
 
 Write each case first and record its red output.
 
-- [ ] 1.1 `boundCommand` third step, the `finished` outcome, and the fixture branch that skips the retained failure for `finished` only.
+- [x] 1.1 `boundCommand` third step, the `finished` outcome, and the fixture branch that skips the retained failure for `finished` only.
   - Stub rows (design.md § Seams under test). The settled row is red before the change (retained, `owner gone without receipt`) and green after (`command finished`, settle events, no failure). All other rows are retained both before and after.
   - Real-owner late-finish case, released and unreleased rows. Released: the temporary root is deleted and only the case's own failure is reported. Before the change it is red, with a second "authority retained" failure and the root left behind.
-- [ ] 1.2 Start-delay hook, an `it.each` (no delay, delayed) over the first case, `waitFor`/`ownerOf`, and re-derived bounds.
+- [x] 1.2 Start-delay hook, an `it.each` (no delay, delayed) over the first case, `waitFor`/`ownerOf`, and re-derived bounds.
   - Red on main: the delayed row fails with `ENOENT … launch.json`. Kill the leaked owner and leaf by hand.
   - Green: both rows report the intended error.
 
 ## 2. Verification
 
-- [ ] 2.1 Record each red before the change and green after. Run the touched files, then `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code` and `pnpm duplicate-code`.
+- [x] 2.1 Record each red before the change and green after. Run the touched files, then `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code` and `pnpm duplicate-code`.
 - [ ] 2.2 Name-list leak diff (design.md § Leak measurement) around one green full `pnpm test:integration` on the final head, with nothing else running. Report the diff on #718. If it is non-empty, the PR uses `Refs` and a follow-up issue is filed. Run the exact-head trusted VPS `pnpm test:docker` and `pnpm test:deploy`.

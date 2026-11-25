@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -8,15 +10,16 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it } from 'vitest';
 import { record } from './container-start-docker-fixture.ts';
 import { ownerPresent } from './case-budget-fixture.ts';
-import { withTrustedDockerFixture } from './trusted-docker-fixture.ts';
+import { START_DELAY_VARIABLE, withTrustedDockerFixture } from './trusted-docker-fixture.ts';
 import {
   claimUncaptured,
   classifyOwnerChildren,
+  ownerOf,
   publishedCommand,
   UNPUBLISHED_COMMAND_RELEASE,
   waitFor,
@@ -24,66 +27,83 @@ import {
 import type { ProcessRow } from './trusted-docker-uncaptured-fixture.ts';
 import { groupIsAbsent, groupSettlesAfterClose } from '../../scripts/trusted-docker-record.mjs';
 
-// As in the custody deadline case: the wait starts at the 5s fixture deadline and ends near 15s,
-// below the 20_000 case bound; fixture.deadline has passed by then.
-const COMMAND_LAUNCH_MS = 10_000;
+// Past the 2.5s start slice below, so a delayed start is killed before it writes launch.json.
+const START_DELAY_MS = 3000;
+// As in the custody deadline case, one window for the launch and the leaf starts at the 5s fixture
+// deadline (fixture.deadline has passed by then); a delayed start adds its delay before both.
+const COMMAND_LAUNCH_MS = START_DELAY_MS + 10_000;
+// The case: the fixture deadline, the window, and 5s for cleanup and the assertions after it.
+const UNCAPTURED_START_CASE_MS = 5000 + COMMAND_LAUNCH_MS + 5000;
 
 // The owner sleeps 4s before its manifest and its start gets the last 2.5s of the 5s case
 // deadline, so cleanup finds it uncaptured, held after spawning its command, before child.json.
 // The owner publishes the command pid as soon as its spawn returns, long before the leaf is ready.
-it('retires the command group of a start killed before its owner published the command', async () => {
-  const pids = { directory: '', owner: 0, command: 0, receipt: '' };
-  try {
-    const failed = await withTrustedDockerFixture(
-      'unpublished-command',
-      async (fixture) => {
-        pids.directory = fixture.directory;
-        await delay(Math.max(0, fixture.deadline - Date.now() - 2500));
-        expect(() => fixture.start()).toThrow(/^command start: killed at the case deadline after/);
-        const base = join(fixture.home, '.local/share/dsh-team/docker-verification');
-        const root = join(base, readdirSync(base)[0] ?? 'missing');
-        pids.receipt = join(root, 'child.json');
-        pids.owner = Number(
-          record(record(JSON.parse(readFileSync(join(root, 'launch.json'), 'utf8'))).owner).pid,
-        );
-        const request = record(JSON.parse(readFileSync(join(root, 'request.json'), 'utf8')));
-        // A held leaf writes nothing more, so its group outlives the owner unless it is retired.
-        const leaf = join(String(request.temporary), 'child-ready.json');
-        for (const until = Date.now() + COMMAND_LAUNCH_MS; !existsSync(leaf);) {
-          if (Date.now() >= until) throw new Error('Held owner launched no ready command');
-          await delay(50);
+// The killed start's orphaned CLI writes launch.json only after its owner spawns, so with or
+// without a start delay the invocation and launch.json are awaited, never read at once (#718).
+it.each([
+  ['', 0],
+  [' and its launch.json', START_DELAY_MS],
+])(
+  'retires the command group of a start killed before its owner%s published the command',
+  async (_scene, startDelay) => {
+    const pids = { directory: '', owner: 0, command: 0, receipt: '' };
+    try {
+      const failed = await withTrustedDockerFixture(
+        'unpublished-command',
+        async (fixture) => {
+          pids.directory = fixture.directory;
+          await delay(Math.max(0, fixture.deadline - Date.now() - 2500));
+          expect(() => fixture.start({ [START_DELAY_VARIABLE]: String(startDelay) })).toThrow(
+            /^command start: killed at the case deadline after/,
+          );
+          const base = join(fixture.home, '.local/share/dsh-team/docker-verification');
+          const invocation = () =>
+            (existsSync(base) ? readdirSync(base)[0] : undefined) ?? 'missing';
+          const launch = () => join(base, invocation(), 'launch.json');
+          const until = Date.now() + COMMAND_LAUNCH_MS;
+          const left = () => until - Date.now();
+          await waitFor(() => existsSync(launch()), left(), 'Killed start published no launch');
+          const root = join(base, invocation());
+          pids.receipt = join(root, 'child.json');
+          pids.owner = ownerOf(launch());
+          // request.json precedes launch.json, so it is complete once launch.json exists.
+          const request = record(JSON.parse(readFileSync(join(root, 'request.json'), 'utf8')));
+          // A held leaf writes nothing more, so its group outlives the owner unless it is retired.
+          const leaf = join(String(request.temporary), 'child-ready.json');
+          await waitFor(() => existsSync(leaf), left(), 'Held owner launched no ready command');
+          const command = publishedCommand(fixture.repository);
+          if (command === undefined) throw new Error('Held owner published no command');
+          pids.command = command;
+
+          expect(existsSync(pids.receipt)).toBe(false);
+          expect(groupIsAbsent(pids.command)).toBe(false);
+        },
+        undefined,
+        Date.now() + 5000,
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(failed).toBeInstanceOf(AggregateError);
+      expect((failed as AggregateError).errors.map(String)).toEqual([
+        `Error: Uncaptured custody fixture authority retained: command ${String(pids.command)}`,
+      ]);
+      expect(await groupSettlesAfterClose(pids.command)).toBe(true);
+      expect(ownerPresent(pids.owner)).toBe(false);
+      expect(existsSync(pids.receipt)).toBe(false);
+    } finally {
+      for (const pid of [pids.owner, -pids.command].filter(Boolean))
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // Already settled by the fixture: the green outcome.
         }
-        const command = publishedCommand(fixture.repository);
-        if (command === undefined) throw new Error('Held owner published no command');
-        pids.command = command;
-
-        expect(existsSync(pids.receipt)).toBe(false);
-        expect(groupIsAbsent(pids.command)).toBe(false);
-      },
-      undefined,
-      Date.now() + 5000,
-    ).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-
-    expect(failed).toBeInstanceOf(AggregateError);
-    expect((failed as AggregateError).errors.map(String)).toEqual([
-      `Error: Uncaptured custody fixture authority retained: command ${String(pids.command)}`,
-    ]);
-    expect(await groupSettlesAfterClose(pids.command)).toBe(true);
-    expect(ownerPresent(pids.owner)).toBe(false);
-    expect(existsSync(pids.receipt)).toBe(false);
-  } finally {
-    for (const pid of [pids.owner, -pids.command].filter(Boolean))
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        // Already settled by the fixture: the green outcome.
-      }
-    rmSync(pids.directory, { recursive: true, force: true });
-  }
-}, 20_000);
+      rmSync(pids.directory, { recursive: true, force: true });
+    }
+  },
+  UNCAPTURED_START_CASE_MS,
+);
 
 // #692 budgets, shared by (a) and (b); (a) never spends LATE_RECEIPT_MS. The start window is the
 // owner's 4s pre-manifest hold, 3s of CLI start margin and at least 2s of identity wait, so the
@@ -208,6 +228,123 @@ it.each([
   IDENTITY_CASE_MS,
 );
 
+// After the expiry, one window for the released owner's result.json and its exit.
+const LATE_RESULT_MS = 5000;
+// The case: the fixture deadline, the window above, the claim's 2s stop confirmation and 2s scan,
+// the owner's 5s settle, and 4s of margin.
+const LATE_FINISH_CASE_MS = IDENTITY_FIXTURE_MS + LATE_RESULT_MS + 2000 + 2000 + 5000 + 4000;
+
+/**
+ * A captured start whose owner holds before its command spawn past the identity wait. With
+ * `release`, its launch then fails, so it writes a settled result.json and exits without
+ * child.json before cleanup; without, cleanup freezes the held owner and finds no command.
+ */
+async function lateFinish(release: boolean) {
+  const pids = { directory: '', owner: 0, temporary: '' };
+  try {
+    const failed = await withTrustedDockerFixture(
+      'late-finish',
+      async (fixture) => {
+        pids.directory = fixture.directory;
+        await delay(Math.max(0, fixture.deadline - Date.now() - IDENTITY_START_WINDOW_MS));
+        let expired: Error | undefined;
+        try {
+          await fixture.start();
+        } catch (error) {
+          if (!(error instanceof Error)) throw error;
+          expired = error;
+        }
+        if (expired === undefined) throw new Error('Held owner published its command identity');
+        const base = join(fixture.home, '.local/share/dsh-team/docker-verification');
+        const root = join(base, readdirSync(base)[0] ?? 'missing');
+        pids.owner = ownerOf(join(root, 'launch.json'));
+        const request = record(JSON.parse(readFileSync(join(root, 'request.json'), 'utf8')));
+        pids.temporary = String(request.temporary);
+        const result = join(root, 'result.json');
+        if (release) {
+          const released = join(fixture.repository, UNPUBLISHED_COMMAND_RELEASE);
+          // This owner publishes no command record, so nothing created the release directory.
+          mkdirSync(dirname(released), { recursive: true });
+          writeFileSync(released, 'release');
+          const until = Date.now() + LATE_RESULT_MS;
+          const left = () => until - Date.now();
+          await waitFor(() => existsSync(result), left(), 'Released owner wrote no result.json');
+          // A live owner would be frozen and scanned instead: claimed for the wrong reason.
+          await waitFor(() => !ownerPresent(pids.owner), left(), 'Released owner did not exit');
+        }
+        const terminal = existsSync(result)
+          ? record(JSON.parse(readFileSync(result, 'utf8')))
+          : undefined;
+        expect({
+          failure: terminal?.failure,
+          command: terminal?.command,
+          receipt: existsSync(join(root, 'child.json')),
+        }).toEqual({
+          failure: release ? 'launch' : undefined,
+          command: release ? { exitCode: null, signal: null, settled: true } : undefined,
+          receipt: false,
+        });
+        throw expired;
+      },
+      undefined,
+      Date.now() + IDENTITY_FIXTURE_MS,
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const unpublished = expect.stringMatching(
+      new RegExp(
+        `^Error: Command identity unpublished after \\d+ms: pid=${String(pids.owner)} present=true$`,
+      ),
+    ) as unknown;
+    return {
+      failure: errorTree(failed),
+      ownerPresent: ownerPresent(pids.owner),
+      temporary: existsSync(pids.temporary) ? 'kept' : 'deleted',
+      expected: {
+        // Only the case's own failure: a finished command's claim adds none.
+        failure: release
+          ? unpublished
+          : {
+              message: 'Custody scenario and cleanup failed',
+              errors: [
+                unpublished,
+                {
+                  message: 'Owned custody fixture cleanup unconfirmed',
+                  errors: [
+                    'Error: Uncaptured custody fixture authority retained: no command started',
+                  ],
+                },
+              ],
+            },
+        ownerPresent: false,
+        temporary: 'deleted',
+      },
+    };
+  } finally {
+    if (pids.owner)
+      try {
+        process.kill(pids.owner, 'SIGKILL');
+      } catch {
+        // Already settled by the fixture: the green outcome.
+      }
+    rmSync(pids.directory, { recursive: true, force: true });
+  }
+}
+
+it.each([
+  ['finished after the identity wait', true],
+  ['still held before its command', false],
+])(
+  'claims a captured start whose owner %s',
+  async (_scene, release) => {
+    const { expected, ...outcome } = await lateFinish(release);
+
+    expect(outcome).toEqual(expected);
+  },
+  LATE_FINISH_CASE_MS,
+);
+
 // Stub pids are never signalled: every seam below is injected.
 const OWNER = 900_001;
 const owner: ProcessRow = { pid: OWNER, ppid: 1, pgid: OWNER, command: 'node run.mjs own' };
@@ -255,8 +392,42 @@ interface Stub {
   birth?: string | null;
   receipt?: boolean;
   launch?: boolean;
+  /** launch.json records no invocation. */
+  anonymous?: boolean;
+  /** result.json: a complete settled terminal record, these fields replaced. */
+  result?: Record<string, unknown>;
+  /** result.json's file mode; 0o600 when unset. */
+  resultMode?: number;
+  /** manifest.json is written unless false. */
+  manifest?: boolean;
   /** The message settle rejects with. */
   settle?: string;
+}
+
+const INVOCATION = '00000000-0000-4000-8000-000000000001';
+const MANIFEST = JSON.stringify({ invocation: INVOCATION });
+const EMPTY_LOG = { bytes: 0, sha256: createHash('sha256').update('').digest('hex') };
+// What a released late-finish owner records: its spawn failed, so no group was ever left.
+const settledResult = {
+  version: 1,
+  invocation: INVOCATION,
+  manifestDigest: createHash('sha256').update(MANIFEST).digest('hex'),
+  state: 'failed',
+  command: { exitCode: null, signal: null, settled: true },
+  interruption: 'none',
+  failure: 'launch',
+  output: { complete: true, stdout: EMPTY_LOG, stderr: EMPTY_LOG },
+  cleanup: { state: 'confirmed', browserExec: null },
+};
+
+function writeTerminal(root: string, stub: Stub) {
+  if (stub.manifest !== false)
+    writeFileSync(join(root, 'manifest.json'), MANIFEST, { mode: 0o600 });
+  if (stub.result === undefined) return;
+  const path = join(root, 'result.json');
+  writeFileSync(path, JSON.stringify({ ...settledResult, ...stub.result }));
+  // Set after the write, so the process umask cannot change the mode under test.
+  chmodSync(path, stub.resultMode ?? 0o600);
 }
 
 async function claim(stub: Stub) {
@@ -268,10 +439,14 @@ async function claim(stub: Stub) {
     if (stub.launch !== false)
       writeFileSync(
         join(root, 'launch.json'),
-        JSON.stringify({ owner: { pid: OWNER, birth: 'o' } }),
+        JSON.stringify({
+          ...(stub.anonymous ? {} : { invocation: INVOCATION }),
+          owner: { pid: OWNER, birth: 'o' },
+        }),
       );
     if (stub.receipt)
       writeFileSync(join(root, 'child.json'), JSON.stringify({ owner: { pid: 7, birth: 'r' } }));
+    writeTerminal(root, stub);
     const events: string[] = [];
     // A bounded wait polls a load-dependent number of times, so repeats collapse to `<event> …`.
     const note = (event: string) => {
@@ -315,6 +490,7 @@ async function claim(stub: Stub) {
     const failure = claimed.failure instanceof Error ? claimed.failure.message : claimed.failure;
     return {
       report: claimed.report,
+      finished: claimed.finished,
       child: claimed.authority?.child,
       retained: !claimed.authority,
       events,
@@ -339,6 +515,7 @@ const unsettled = { failure: 'owner unsettled' };
 const CHANGED = 'Fixture identity changed; retaining authority';
 const UNOBSERVED = 'Fixture process observation unavailable';
 const unread = { failure: expect.stringMatching(/^ENOENT/) as unknown };
+const finish = { finished: true };
 const unbound = (reason: string) => `command unidentified (${reason})`;
 // Two rows wait the full 2s identification bound of the fixture; 10s leaves room under load.
 const CLAIM_CASE_MS = 10_000;
@@ -433,6 +610,35 @@ it.each<[string, Stub, string, boolean, string[], object?]>([
     unsettled,
   ],
   ['an unread launch', { launch: false }, unbound('cleanup failed'), true, [], unread],
+  // A gone owner without child.json is claimed only from its own validated, settled result.json.
+  ['gone, settled result', { live: [false], result: {} }, 'command finished', false, gone, finish],
+  ...(
+    [
+      [
+        'an unsettled result',
+        { result: { command: { ...settledResult.command, settled: false } } },
+      ],
+      ['a result of another manifest', { result: { manifestDigest: '0'.repeat(64) } }],
+      ['a result of another invocation', { result: { invocation: INVOCATION.replace('1', '2') } }],
+      ['an unreadable result', { result: {}, resultMode: 0o644 }],
+      ['a result without its manifest', { result: {}, manifest: false }],
+      ['a launch without its invocation', { result: {}, anonymous: true }],
+    ] as const
+  ).map(([scene, terminal]): [string, Stub, string, boolean, string[]] => [
+    `gone, ${scene}`,
+    { live: [false], ...terminal },
+    unbound('owner gone without receipt'),
+    true,
+    gone,
+  ]),
+  [
+    'gone, receipt and result',
+    { live: [false], receipt: true, result: {} },
+    'command 7',
+    false,
+    gone,
+    receipted,
+  ],
 ])(
   'claims an uncaptured owner (%s) with one report',
   async (_scene, stub, report, retained, events, extra) => {

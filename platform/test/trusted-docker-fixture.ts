@@ -22,6 +22,7 @@ import { record } from './container-start-docker-fixture.ts';
 import { CLOSE_RECEIPT_PRELOAD } from './trusted-docker-close-fixture.ts';
 import {
   claimUncaptured,
+  LATE_FINISH_PRELOAD,
   UNPUBLISHED_COMMAND_PRELOAD,
 } from './trusted-docker-uncaptured-fixture.ts';
 import { fixtureProcessCustody } from './trusted-docker-process-fixture.ts';
@@ -49,6 +50,7 @@ type CustodyMode =
   | 'release-blind'
   | 'slow-owner'
   | 'unpublished-command'
+  | 'late-finish'
   | 'retire';
 
 /** Retirement variants of the `retire` mode; the owner preload answers from a fake daemon. */
@@ -79,6 +81,44 @@ fs.writeFileSync(exit+'.pending',JSON.stringify({vanished,exited:now}));fs.renam
 process.stdout.write('ready');setInterval(()=>{},1000);`;
 // The retirement setup publishes its detached fixture platform identity here.
 const FAKE_PLATFORM_RECORD = 'fake-platform.json';
+/**
+ * A start given this test-only variable holds its `own` spawn that many ms, after request.json and
+ * before launch.json (#718). The owner never sees it: its runtime environment is an allowlist.
+ */
+export const START_DELAY_VARIABLE = 'DSH_TEAM_FIXTURE_START_DELAY_MS';
+// The slow owner and the held owners sleep 4s before publishing their manifest.
+const SLOW_OWNER_MODES: readonly CustodyMode[] = [
+  'slow-owner',
+  'unpublished-command',
+  'late-finish',
+];
+const HELD_OWNER_PRELOADS: Partial<Record<CustodyMode, string>> = {
+  'post-close-member': CLOSE_RECEIPT_PRELOAD,
+  'unpublished-command': UNPUBLISHED_COMMAND_PRELOAD,
+  'late-finish': LATE_FINISH_PRELOAD,
+};
+
+/** The preload of both the start (its `own` spawn) and the owner, denying group observations. */
+const fixturePreload = (
+  mode: CustodyMode,
+  [count, code]: [string, string],
+) => `import childProcess from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
+const spawn=childProcess.spawn;
+childProcess.spawn=(command,args,options)=>{
+  if(command!==process.execPath||args[1]!=='own')return spawn(command,args,options);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Number(process.env.${START_DELAY_VARIABLE}??0));
+  return spawn(command,['--import',import.meta.url,...args],options);
+};
+syncBuiltinESMExports();
+${SLOW_OWNER_MODES.includes(mode) ? "if(process.argv.includes('own'))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,4000);" : ''}
+const kill=process.kill.bind(process);
+let denied=${count};
+process.kill=(pid,signal)=>{
+  if(pid<0&&signal===0&&denied>0){denied-=1;throw Object.assign(new Error('owned-group-observation-denied'),{code:${JSON.stringify(code)}});}
+  return kill(pid,signal);
+};
+${HELD_OWNER_PRELOADS[mode] ?? ''}`;
 
 interface OwnerIdentity {
   readonly pid: number;
@@ -166,6 +206,7 @@ function prepareCustodyRepository(
   // Count and code of owner kill(-pid, 0) observations failed before deferring to the real call.
   // The slow owner denies none; it sleeps 4s before publishing, holding its start past a deadline.
   // The unpublished-command owner sleeps the same, then holds after spawning its command.
+  // The late-finish owner sleeps the same, then holds before its failing command spawn.
   // The post-close member denies none; its owner records its close and group observations.
   const deniedGroupObservations = (
     {
@@ -174,6 +215,7 @@ function prepareCustodyRepository(
       'group-observation-invalid': ['1', 'EINVAL'],
       'slow-owner': ['0', 'EPERM'],
       'unpublished-command': ['0', 'EPERM'],
+      'late-finish': ['0', 'EPERM'],
       'post-close-member': ['0', 'EPERM'],
     } as Partial<Record<CustodyMode, [string, string]>>
   )[mode];
@@ -188,24 +230,7 @@ function prepareCustodyRepository(
   if (deniedGroupObservations !== undefined)
     writeFileSync(
       join(repository, 'fixture-preload.mjs'),
-      `import childProcess from 'node:child_process';
-import {syncBuiltinESMExports} from 'node:module';
-const spawn=childProcess.spawn;
-childProcess.spawn=(command,args,options)=>{
-  if(command===process.execPath&&args[1]==='own')
-    return spawn(command,['--import',import.meta.url,...args],options);
-  return spawn(command,args,options);
-};
-syncBuiltinESMExports();
-${['slow-owner', 'unpublished-command'].includes(mode) ? "if(process.argv.includes('own'))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,4000);" : ''}
-const kill=process.kill.bind(process);
-let denied=${deniedGroupObservations[0]};
-process.kill=(pid,signal)=>{
-  if(pid<0&&signal===0&&denied>0){denied-=1;throw Object.assign(new Error('owned-group-observation-denied'),{code:${JSON.stringify(deniedGroupObservations[1])}});}
-  return kill(pid,signal);
-};
-${mode === 'post-close-member' ? CLOSE_RECEIPT_PRELOAD : ''}
-${mode === 'unpublished-command' ? UNPUBLISHED_COMMAND_PRELOAD : ''}`,
+      fixturePreload(mode, deniedGroupObservations),
     );
   writeFileSync(
     join(repository, 'package.json'),
@@ -447,19 +472,23 @@ async function cleanupTrustedDockerFixture({
   // recorded, is not issued: freeze its owner, bind its command, then settle the owner, so the
   // loop below retires that command's group like a captured invocation's.
   for (const name of names.filter((candidate) => !issued.has(candidate))) {
-    const { report, authority, failure } = await claimUncaptured(join(custodyBase, name), {
-      live: processes.identityLive,
-      observe: observeProcess,
-      run: (file, args) =>
-        budget.run('uncaptured owner', file, args, {
-          encoding: 'utf8',
-          timeout: 2000,
-          maxBuffer: 4 * 1024 * 1024,
-        }),
-      signal: (pid, signal) => process.kill(pid, signal),
-      settle: (identity) => settle(identity, false),
-    });
-    reports.push(`Uncaptured custody fixture authority retained: ${report}`);
+    const { report, authority, failure, finished } = await claimUncaptured(
+      join(custodyBase, name),
+      {
+        live: processes.identityLive,
+        observe: observeProcess,
+        run: (file, args) =>
+          budget.run('uncaptured owner', file, args, {
+            encoding: 'utf8',
+            timeout: 2000,
+            maxBuffer: 4 * 1024 * 1024,
+          }),
+        signal: (pid, signal) => process.kill(pid, signal),
+        settle: (identity) => settle(identity, false),
+      },
+    );
+    // A command its owner finished and settled is handed back without a failure (#718).
+    if (!finished) reports.push(`Uncaptured custody fixture authority retained: ${report}`);
     if (failure !== undefined) failures.push(failure);
     if (authority) issued.set(name, authority);
   }
