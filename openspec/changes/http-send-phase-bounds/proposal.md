@@ -30,7 +30,7 @@
 
 - **`sendHttp`.**
   - **Default bound.** Each send is bounded by a named default, `HTTP_SEND_MS`, instead of the literal 5 s.
-    - The value comes from a load measurement: about 10× above the largest successful send, and at most 2500 ms.
+    - The value comes from a load measurement: 2500 ms: the largest value that keeps the close wait inside the default budget. That is about 6× the largest successful send measured at load 67–85 (400.2 ms; ten files, 5 runs, 745 sends, 0 failures). The 10× first planned does not fit under the 5 s default (4002 + 2000 > 5000), and raising the callers' case budgets is out of this slice's scope.
     - The sum `HTTP_SEND_MS + HTTP_OBSERVATION_MS` (the close wait) therefore stays below the default 5 s case budget, leaving room for the case's setup.
   - **Named override.** `sendHttp` takes an optional named bound for callers whose sends are legitimately slower and whose case budgets are far larger. The default is `HTTP_SEND_MS`.
     - `instance-idle.docker.test.ts` (real DSH and cold container starts, case budget 900 s) passes `HTTP_SEND_SLOW_MS = 5000`.
