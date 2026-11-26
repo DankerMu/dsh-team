@@ -13,7 +13,7 @@ Must preserve:
 
 Must add/change:
 
-- `scripts/pr-merge-ref.sh`: no arguments; `git rev-parse --verify --quiet 'HEAD^2^{commit}'` must succeed and `HEAD^3` must not resolve; otherwise the fixed `::error::` line and exit 1. bash 3.2 compatible, shellcheck clean.
+- `scripts/pr-merge-ref.sh`: no arguments; `git rev-parse --verify --quiet 'HEAD^2^{commit}'` must succeed, `HEAD^3` must not resolve, and `git merge-base --all HEAD^1 HEAD^2` must print exactly one commit (review round 1: a criss-cross history gives several merge bases, and git's three-dot diff silently picks one, so a lockfile-only or code-reverting PR passed). Otherwise a fixed `::error::` line and exit 1. bash 3.2 compatible, shellcheck clean.
 - docker-evidence `RANGE`: `github.event_name == 'pull_request' && 'HEAD^1...HEAD^2' || format('{0}..{1}', github.event.before, github.event.after)`. Its scope step runs `bash scripts/pr-merge-ref.sh` first when `GITHUB_EVENT_NAME` is `pull_request`.
 - lockfile-consistency: guard, then `changed="$(git diff --name-only 'HEAD^1...HEAD^2')"`; drop the `BASE_SHA` env.
 - diff-size: inline two-parent check replaced by the guard script.
@@ -38,7 +38,8 @@ Required evidence (each red on main's step text or script, green after):
 - 1b: base B, main changes `package.json` after B, the PR changes only `pnpm-lock.yaml`, merge `HEAD`, stale `BASE_SHA=B` → step exits 1 with the lockfile `::error::` (on main: passes). A PR with both lockfile and `package.json` → passes. Non-merge `HEAD` whose single commit changes both `pnpm-lock.yaml` and `package.json` → fails with the guard's fixed line (on main: passes).
 - 2a: the PR adds a `.gitattributes` with `* -diff` plus a 300-line file → the real step prints `Changed lines …: 301 (limit: 400)` and exits 0 (on main: `: 0`).
 - 2b: the PR replaces a symlink with a 500-line regular file → `pr-diff-lines.sh HEAD^1 HEAD^2` run directly prints `501` (on main: `0`). Seam is the script, because 501 exceeds the 400 limit and the step would fail on the limit.
-- `pr-merge-ref.sh`: two-parent → 0; one-parent → 1 with the fixed line; octopus → 1.
+- `pr-merge-ref.sh`: two-parent with one merge base → 0; one-parent → 1 with the fixed line; octopus → 1; criss-cross (two merge bases) → 1 with a fixed line.
+- Criss-cross through the real steps: the lockfile step (PR changes only `pnpm-lock.yaml`, main's `x/package.json` reachable from the second base) → exit 1 with the guard line (red at `d84ca86`: passes); the docs-only scope step under `pull_request` → fails, `docs_only` unset (red at `d84ca86`: `docs_only=true`); the diff-size step → fails with no count.
 - All existing guardrail cases pass; `pnpm test:guardrails` exit 0.
 - CI on the PR head runs the real jobs on the real merge ref: docker-evidence, lockfile-consistency and diff-size guard all succeed.
 

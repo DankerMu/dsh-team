@@ -3,7 +3,7 @@
 - **Public API / CLI / script entry (selected).** New `scripts/pr-merge-ref.sh`; `pr-diff-lines.sh` options. Tasks 1.1, 1.4; shellcheck via `pnpm lint:shell`.
 - **Config / project setup (selected).** `.github/workflows/ci.yml` step text and `env`. Tasks 1.2, 1.3, 1.4; `pnpm lint:ci`; CI on the PR head.
 - **Legacy compatibility (selected).** Push-event range, labels' `if:`, existing guardrail cases, error texts. Task 2.1 (all existing guardrails green); design "Must preserve".
-- **Error handling (selected).** Fail closed on a non-merge `HEAD` in all three jobs and on an old git. Tasks 1.1–1.4 fail-closed cases.
+- **Error handling (selected).** Fail closed on a non-merge `HEAD`, on parents without exactly one merge base, in all three jobs, and on an old git. Tasks 1.1–1.4 and 1.6 fail-closed cases.
 - **Release / packaging (selected).** `--attr-source` needs git ≥ 2.40; below it the script fails closed. Task 1.4 (header comment, fail-closed reason unchanged); checked hosts: ubuntu-24.04 runner (CI on the PR head), local git 2.49.
 - **Documentation (selected).** `scripts/README.md` paragraphs for diff size, docker-evidence and lockfile; `constraints.yaml` `enforced_by`. Task 1.5; `pnpm lint:agents`.
 - **Not selected:**
@@ -25,11 +25,12 @@ Write each guardrail case first against main's step text and record its red outp
 - [x] 1.3 lockfile-consistency: guard + `HEAD^1...HEAD^2`. Cases: stale base + main changes `package.json` + PR changes only `pnpm-lock.yaml` → exit 1 with the lockfile error (red on main: passes); lockfile + `package.json` in the PR → passes; non-merge `HEAD` whose commit changes both `pnpm-lock.yaml` and `package.json` → fails with the guard's fixed line (red on main: passes).
 - [x] 1.4 diff-size: guard script replaces the inline check (existing non-merge and octopus cases keep passing, reason text may move to the guard's line — update the expected text in the same change only if it changes); `pr-diff-lines.sh` gets `--attr-source="$from"` and `ACMRT`. `size_fixture` copies `scripts/pr-merge-ref.sh`. Cases: `.gitattributes` `* -diff` + 300-line file → the real step's `Changed lines …: 301 (limit: 400)`, exit 0 (red on main: `: 0`); symlink → 500-line file → `pr-diff-lines.sh HEAD^1 HEAD^2` run directly prints `501` (red on main: `0`; 500 added + 1 removed; the script is the seam because 501 exceeds the limit).
 - [x] 1.5 Docs: `scripts/README.md` (§ Diff size, docker-evidence PR range, lockfile pairing, guardrail list at `:37`), `constraints.yaml` `enforced_by` wording if needed.
+- [x] 1.6 Review round 1 (fix pass 1): the guard also requires exactly one merge base of `HEAD^1` and `HEAD^2`. Cases (red at `0bcf630`): `pr-merge-ref.sh` on criss-cross and on unrelated parents → 1; the real scope, lockfile and diff-size steps on criss-cross fixtures → fail with the guard line.
 
 ## 2. Verification
 
-- [ ] 2.1 `pnpm test:guardrails`: exit 0, new cases PASS (red output for each recorded from main's step text).
-- [ ] 2.2 `pnpm lint:shell`, `pnpm lint:ci`, `pnpm lint:agents`, `pnpm lint`, `pnpm fmt:check` (tracked files): exit 0.
-- [ ] 2.3 CI on the PR head green (the `guardrails` job is the only proof that the harness pins `GITHUB_EVENT_NAME` correctly under `pull_request`), in particular `Trusted Docker and Compose evidence`, `Lockfile-manifest consistency` and `PR diff size guard` on the real merge ref.
+- [x] 2.1 `pnpm test:guardrails`: exit 0, new cases PASS (red output for each recorded from main's step text).
+- [x] 2.2 `pnpm lint:shell`, `pnpm lint:ci`, `pnpm lint:agents`, `pnpm lint`, `pnpm fmt:check` (tracked files): exit 0.
+- [ ] 2.3 CI on the PR head green. `Trusted Docker and Compose evidence` (scope step) and `Lockfile-manifest consistency` run the guard on the real merge ref. This PR carries `diff-limit-exempt`, so `Enforce max PR diff lines` is skipped here; the runner's `--attr-source` support and the guard under `pull_request` are proven by the `Guardrail self-test` job (ubuntu-24.04), whose `size_attrs` (301), `size_symlink` (501), merge-ref and criss-cross cases must PASS in its log.
 - [ ] 2.4 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy` (Docker evidence gate; the diff is not docs-only).
-- [ ] 2.5 Post item 3's evidence on #734.
+- [x] 2.5 Post item 3's evidence on #734.

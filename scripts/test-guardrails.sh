@@ -66,6 +66,17 @@ range_restore() {
 
 fixture_commit() { git -c user.name=guardrails -c user.email=guardrails@localhost commit --quiet -m "$1"; }
 size_merge() { git -c user.name=guardrails -c user.email=guardrails@localhost merge --quiet --no-ff -m merge "$@" >/dev/null; }
+# criss_cross <main change> <PR change>: HEAD's parents have two merge bases, m1 and A1
+# (#734 review 1). Main commits m1 (<main change>); branch a's A1 changes package.json;
+# the PR starts at A1, syncs main, makes <PR change>; main merges a, then the PR.
+# A1 is dated after m1, so git's three-dot diff silently picks A1 and hides m1.
+criss_cross() {
+  git branch a && "$1" && git add -A && fixture_commit "feat: m1" && git checkout --quiet a &&
+    echo '{"a":1}' >package.json && git add -A &&
+    GIT_COMMITTER_DATE="$(($(git log -1 --format=%ct main) + 1)) +0000" fixture_commit "build: a1" &&
+    git checkout --quiet -b pr && size_merge main && "$2" && git add -A && fixture_commit "feat: pr" &&
+    git checkout --quiet main && size_merge a && size_merge pr
+}
 
 # range_commit <message> <path>...: appends to each path (A when new, M when tracked).
 range_commit() {
@@ -451,14 +462,29 @@ docs/a.md" docs/a.md
 scope_event=pull_request scope_setup=scope_stale scope_range='HEAD^1~1...HEAD' \
   scope_case "scope step on a stale base range sees main's code" "" "evidence required: platform/x.ts" docs/a.md
 guard_line="::error::HEAD is not a two-parent merge ref; cannot read the PR range."
+bases_line="::error::HEAD^1 and HEAD^2 do not have exactly one merge base; cannot read the PR range."
+# scope_guard <range> <setup> <file>...: the pull_request step's exit code; any output fails.
 scope_guard() {
-  scope_fixture scope_files docs/a.md || return 99
-  scope_run pull_request 'HEAD~1...HEAD'
+  range="$1"
+  shift
+  scope_fixture "$@" || return 99
+  scope_run pull_request "$range"
   rc=$?
   [ ! -s "$tmp/scope-output" ] || { echo "GITHUB_OUTPUT: $(cat "$tmp/scope-output")" && return 98; }
   return "$rc"
 }
-expect_exit "scope step fails on a non-merge pull_request HEAD" 1 "$guard_line" scope_guard
+expect_exit "scope step fails on a non-merge pull_request HEAD" 1 "$guard_line" \
+  scope_guard 'HEAD~1...HEAD' scope_files docs/a.md
+# Criss-cross: main's m1 rewrites platform/f.ts; the PR restores it and edits docs/a.md.
+# From A1 (the base git picks) that reads docs-only; the PR really changes code.
+criss_code() { echo m1 >platform/f.ts; }
+criss_revert() { echo base >platform/f.ts && mkdir -p docs && echo x >docs/a.md; }
+scope_criss() {
+  mkdir -p platform && echo base >platform/f.ts && git add -A && fixture_commit "feat: f" &&
+    criss_cross criss_code criss_revert
+}
+expect_exit "scope step fails when the merge ref has two merge bases" 1 "$bases_line" \
+  scope_guard 'HEAD^1...HEAD^2' scope_criss
 # Distinct PR deliveries must retain their own checks, even in the pending queue.
 for policy in shared cancel-disabled action-only malformed main-cancel; do
   restore
@@ -739,6 +765,11 @@ size_case "diff size counts dash-leading and blank lines" size_dash "$size_line:
 size_case "diff size ignores a stale payload base" size_stale "$size_line: 3 (limit: $size_limit)"
 size_case "diff size fails when HEAD is not a merge" size_flat "fail:HEAD is not a two-parent merge"
 size_case "diff size fails on an octopus HEAD" size_octopus "fail:HEAD is not a two-parent merge"
+# Main's m1 adds x/package.json; the PR changes only pnpm-lock.yaml (#734 review 1).
+criss_manifest() { mkdir -p x && echo '{}' >x/package.json; }
+criss_lockfile() { echo v2 >>pnpm-lock.yaml; }
+size_criss() { criss_cross criss_manifest criss_lockfile; }
+size_case "diff size fails when the merge ref has two merge bases" size_criss "fail:$bases_line"
 size_case "diff size reads attributes from the base, not the PR" size_attrs "$size_line: 301 (limit: $size_limit)"
 expect_field "diff size step is still skipped by the diff-limit-exempt label" 'Enforce max PR diff lines' if \
   "\${{ !contains(github.event.pull_request.labels.*.name, 'diff-limit-exempt') }}"
@@ -788,11 +819,19 @@ else
   echo "FAIL  pr-diff-lines.sh (no merge base) — could not build the unrelated root"
   fail=$((fail + 1))
 fi
-# The shared merge-ref guard (#734): exit 0 only on a two-parent HEAD.
+# The shared merge-ref guard (#734): exit 0 only on a two-parent HEAD whose parents
+# have exactly one merge base.
 merge_ref() { size_fixture "$1" || return 99; (cd "$size_repo" && bash scripts/pr-merge-ref.sh); }
 expect_exit "pr-merge-ref.sh accepts a two-parent HEAD" 0 "" merge_ref size_stale
 expect_exit "pr-merge-ref.sh rejects a one-parent HEAD" 1 "$guard_line" merge_ref size_flat
 expect_exit "pr-merge-ref.sh rejects an octopus HEAD" 1 "$guard_line" merge_ref size_octopus
+expect_exit "pr-merge-ref.sh rejects two merge bases" 1 "$bases_line" merge_ref size_criss
+# Unrelated parents: git merge-base --all prints nothing and fails.
+size_unrelated_merge() {
+  git checkout --quiet --orphan side && echo side >side.txt && git add -A && fixture_commit "feat: side" &&
+    git checkout --quiet main && size_merge --allow-unrelated-histories side
+}
+expect_exit "pr-merge-ref.sh rejects parents with no merge base" 1 "$bases_line" merge_ref size_unrelated_merge
 # #734 1b: the lockfile step text from ci.yml with a stale payload BASE_SHA.
 lock_step="$tmp/lock-step.sh"
 ci_step_field 'Check lockfile–manifest pairs' run "$lock_step"
@@ -816,6 +855,7 @@ expect_exit "lockfile pairing ignores a stale payload base" 1 \
   "pnpm-lock.yaml changed but no package.json did" lock_case lock_stale
 expect_exit "lockfile pairing accepts lockfile plus manifest" 0 "lockfile and manifests agree" lock_case lock_pair
 expect_exit "lockfile pairing fails on a non-merge HEAD" 1 "$guard_line" lock_case lock_flat
+expect_exit "lockfile pairing fails when the merge ref has two merge bases" 1 "$bases_line" lock_case size_criss
 expect_field "lockfile pairing is still skipped by the lockfile-refresh label" 'Check lockfile–manifest pairs' if \
   "!contains(github.event.pull_request.labels.*.name, 'lockfile-refresh')"
 
