@@ -522,7 +522,7 @@ const unloadAt = (script: string) =>
   consoleMessage(UNLOAD, `${BASE}/sidebar/onlyoffice/ds/${VERSION}/${script}`, 2145);
 
 /** The page openHinted drives: the row shown, the editor mounted; the row's click logs `logged`. */
-function hintedPage(logged: readonly ConsoleStub[]) {
+function hintedPage(logged: readonly ConsoleStub[], facts: object = mounted) {
   const listeners = new Set<(message: ConsoleStub) => void>();
   const row = {
     click() {
@@ -532,7 +532,7 @@ function hintedPage(logged: readonly ConsoleStub[]) {
   };
   const answer = (expression: string): unknown => {
     if (expression === `Boolean(${rowQuery(NAME)})`) return true;
-    if (expression === officeFacts(NAME)) return mounted;
+    if (expression === officeFacts(NAME)) return facts;
     if (expression === previewIds(NAME)) return [];
     throw new Error('unscripted page expression');
   };
@@ -569,3 +569,33 @@ it("fails openHinted's refusal wait with the collected errors on an unknown-sour
     `ServiceWorker refusal not logged, collected ${JSON.stringify([UNLOAD, ...refused])}`,
   );
 });
+
+// A visible iframe on a socket path: the key is in page state only, never in a compared value.
+const keyedFrame = { ...frame, path: `/sidebar/onlyoffice/ds/9.4.0/doc/${KEY}/c/` };
+const shownFrame = { ...keyedFrame, path: '/sidebar/onlyoffice/ds/9.4.0/doc/<redacted>/c/' };
+it.each([
+  ['the hints', [collab], [keyedFrame], [shownFrame], 'Office hints, seen'],
+  [
+    'the editor iframes',
+    [collab, restart],
+    [frame, keyedFrame],
+    [frame, shownFrame],
+    'Editor iframes, seen',
+  ],
+])(
+  'fails openHinted on %s naming the page state with its key redacted',
+  async (_case, hints, iframes, shown, prefix) => {
+    const { page } = hintedPage(refusals, { ...mounted, hints, iframes });
+
+    const error = await openHinted(
+      page,
+      shoot,
+      hintsLane.session,
+      NAME,
+      'office-hints-collab',
+    ).catch((caught: unknown) => caught);
+
+    const seen = JSON.stringify({ ...mounted, hints, iframes: shown });
+    expect(failed(error).message).toContain(`${prefix} ${seen}`);
+  },
+);

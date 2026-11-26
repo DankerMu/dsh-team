@@ -16,13 +16,13 @@ See `design.md` § Must preserve.
 
 Write each case first and record its red output, then change the code.
 
-- [ ] 1.1 `withWorkFiles` double failure → one plain scrubbed `Error`. Cases per design (with and without a retirement wrapper; keys absent from `everythingPrinted`).
-- [ ] 1.2 `expectFreeOf` in `stack-browser-fixture.ts`; both forgotten checks (`:454`, `:476`) call it. Cases per design (red with the old body first).
-- [ ] 1.3 Sweep (#3) of the ten files named in the proposal, actual, expected and message arguments, by the source rule there; change/keep table in the PR description; no-echo cases where a unit seam reaches the site.
-- [ ] 1.4 Preserved behavior (green before and after, no red expected): lane-only failure through `withWorkFiles` rejects with the same object.
+- [x] 1.1 `withWorkFiles` double failure → one plain scrubbed `Error`. Cases per design (with and without a retirement wrapper; keys absent from `everythingPrinted`).
+- [x] 1.2 `expectFreeOf` in `stack-browser-fixture.ts`; both forgotten checks (`:454`, `:476`) call it. Cases per design (red with the old body first).
+- [x] 1.3 Sweep (#3) of the ten files named in the proposal, actual, expected and message arguments, by the source rule there; change/keep table in the PR description; no-echo cases where a unit seam reaches the site.
+- [x] 1.4 Preserved behavior (green before and after, no red expected): lane-only failure through `withWorkFiles` rejects with the same object.
 
 ## 2. Verification
 
-- [ ] 2.1 The touched integration files, then `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code`, `pnpm duplicate-code`, `pnpm lint:tests`: exit 0.
+- [x] 2.1 The touched integration files, then `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code`, `pnpm duplicate-code`, `pnpm lint:tests`: exit 0.
 - [ ] 2.2 One local `pnpm test:stack` on the final head.
 - [ ] 2.3 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.

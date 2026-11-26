@@ -15,6 +15,7 @@ import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.
 import {
   element,
   recordedError,
+  scrub,
   scrubbedEvidence,
   showSidebarRows,
   until,
@@ -191,7 +192,8 @@ export async function openHinted(
   }
   const final = await page.evaluate<OfficeFacts>(officeFacts(name));
   await shoot(screenshot);
-  const seen = JSON.stringify(final);
+  // Page state: an iframe path may hold a document key.
+  const seen = scrub(JSON.stringify(final));
   const shownHint = { visible: true, nativeHost: true };
   const hints = [
     { kind: 'collab', text: COLLAB, ...shownHint },

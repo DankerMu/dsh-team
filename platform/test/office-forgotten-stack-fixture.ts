@@ -35,6 +35,7 @@ import { NOTICES } from './office-rewrite-stack-fixture.ts';
 import { JWT_JS } from './onlyoffice-probe-script.ts';
 import { withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import {
+  expectFreeOf,
   redactSecrets,
   scrub,
   scrubbedChain,
@@ -451,7 +452,7 @@ async function officeForgotten(
       ),
     );
   }
-  expect(JSON.stringify(positive), 'positive control free of A key').not.toContain(kA);
+  expectFreeOf(positive, kA, 'positive control free of A key');
   // The anchor: the store path is right and A's copy is one directory, named by A's key; counted
   // by key, as other lanes' late copies land meanwhile. The shapes attribute a mismatch, no key.
   const shapes = { before: beforeShape, after: await forgottenShape(lane, kA, '(shape after)') };
@@ -473,11 +474,11 @@ async function officeForgotten(
   ]) as OfficeForgottenEvidence['attack'];
   const present = await forgottenList(lane, '(present)', kA);
   expect(forgottenPresent(present), "A's forgotten copy still present after B's attack").toBe(true);
-  expect(JSON.stringify(present), 'present check free of A key').not.toContain(kA);
+  expectFreeOf(present, kA, 'present check free of A key');
   // The nonce is not on disk yet, so a recovered nonce can only come from the forgotten reassembly.
   expect(await fileHasNonce(lane, nonce), "A's file lacks the nonce before reopening").toBe(false);
   const { recovered, alert, editor: reopened } = await recover(lane, nonce, directory, kA);
-  const seen = `reopen alert ${JSON.stringify(alert)}`;
+  const seen = `reopen alert ${scrub(JSON.stringify(alert), [kA])}`;
   expect(recovered, `A recovers its pre-failure edit from the forgotten copy, ${seen}`).toBe(
     'recovered',
   );

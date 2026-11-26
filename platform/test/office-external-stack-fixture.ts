@@ -22,6 +22,9 @@ import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.
 import {
   composerState,
   element,
+  scrub,
+  scrubbedEvidence,
+  scrubEach,
   showSidebarRows,
   until,
   workbenchSession,
@@ -112,11 +115,12 @@ export function officeExternalLine(evidence: OfficeExternalEvidence | undefined)
   return { ...rest, browser: counted(browser) };
 }
 
-/** Only the projection's fields, so nothing else the platform answers reaches a diff. */
+/** Only the projection's fields, so nothing else the platform answers reaches a diff; the address
+ * read back is scrubbed of any query, which leaves this lane's own addresses as they are. */
 const projected = ({ mode, bundledConfigured, url, jwtConfigured }: Record<string, unknown>) => ({
   mode,
   bundledConfigured,
-  url,
+  url: typeof url === 'string' ? scrub(url) : url,
   jwtConfigured,
 });
 const configuration = (admin: Admin, body?: object) =>
@@ -144,9 +148,8 @@ async function openFailing(page: Page, shoot: (name: string) => Promise<void>, t
   const final = await page.evaluate<OfficeFacts>(officeFacts(NAME));
   await shoot(SCREENSHOT);
   const keys = failureKeys(final.texts);
-  expect(apiScriptFailed(final.texts), `ONLYOFFICE texts, seen ${JSON.stringify(final)}`).toBe(
-    true,
-  );
+  const seen = `ONLYOFFICE texts, seen ${scrub(JSON.stringify(final))}`;
+  expect(apiScriptFailed(final.texts), seen).toBe(true);
   const ready = async () => (await composerState(page)) === 'ready';
   await until(ready, timeout, 'office external composer after the failure');
   await until(
@@ -196,10 +199,11 @@ async function failedOpen(lane: OfficeExternalLane, open: typeof openInBrowser) 
   expect(after, 'Office external file unchanged by opening it').toEqual(file);
   expect(await providerCounts(lane), 'No model request or retrieval').toEqual(before);
   const { consoleErrors, failedRequests } = browser;
-  const trace = JSON.stringify([consoleErrors, responses, failedRequests]);
+  // Console text and request paths may hold a document key: printed scrubbed.
+  const trace = JSON.stringify([consoleErrors, responses, failedRequests].map(scrubEach));
   const seen = `consoleErrors, responses, failedRequests ${trace}`;
   expect(badGatewayPaired(consoleErrors, responses, failedRequests, session.base), seen).toBe(true);
-  expect(browser, seen).toMatchObject({
+  expect(scrubbedEvidence(browser), seen).toMatchObject({
     screenshots: [`${SCREENSHOT}.png`],
     ...{ pageErrors: [], externalRequests: [] },
   });
