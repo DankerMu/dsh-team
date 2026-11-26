@@ -36,7 +36,7 @@ Required evidence:
 - **Probe B** (red before): `run` succeeds, an `onClose` hook never resolves, and no `teardownDeadline` is passed. Expected: rejects with a `message` starting `teardown: application close:`, within `TEARDOWN_CLOSE_MS + 1000` ms of `run`'s end. Before: the runner timeout at 5 s. The hook is released afterwards.
 - **Case C** (preserved; green before and after): `run` throws `E` and the teardown is healthy. It rejects with `E` itself (`toBe(E)`), and `E.message` is unchanged.
 - **Case D** (red before): `run` throws `E` and the teardown hangs. It rejects with `E` itself, and `E.message` equals the original message followed by `; teardown: application close: ` and the reason.
-- **Measurement:** count and max of `withApp` close durations from full `pnpm test:integration` runs at load ≥ 13 and < 67, recorded in the PR and beside the constant. Fit rule: max × 2 ≤ 500 ms.
+- **Measurement:** count and max of `withApp` close durations from full `pnpm test:integration` runs and full `pnpm test` runs at load ≥ 13 and < 67, recorded in the PR and beside the constant. `TEARDOWN_CLOSE_MS` = max over both lanes × 2, rounded up to 50 ms; healthy closes never turn red (accepted cost in proposal).
 - **5 consecutive full `pnpm test:integration` runs**, each started at 1-minute load ≥ 13 and < 67, using bounded `yes` generators that are confirmed gone afterwards. All pass.
 - `pnpm lint` (includes `no-circular`), `pnpm typecheck`, `pnpm dead-code`, `pnpm duplicate-code`, `pnpm lint:tests`: exit 0.
 
@@ -47,6 +47,6 @@ Review focus:
 - The primary failure stays first in every composition; no swallowed error; no `AggregateError`.
 - The teardown deadline is never the step deadline, so a stalled step still closes a healthy app.
 - No import cycle (`boundedStep`/`untilAborted` live in `auth-fixture.ts`).
-- `TEARDOWN_CLOSE_MS` has a measured basis and fits the 5 s default budget with the body.
+- `TEARDOWN_CLOSE_MS` has a measured basis over both lanes; no healthy close can exceed it under the measured load band.
 - A hung close cannot leak into a passing case.
 - Wrappers forward `deadline` without changing their other behavior.

@@ -1,14 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, expect, it, onTestFinished, vi } from 'vitest';
 import { createSession, createSourceAddressResolver } from '../src/auth/index.ts';
 import type { PlatformConfig } from '../src/config.ts';
 import { writeSettings } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import type { GatewayUpstreamResolver } from '../src/gateway/index.ts';
-import { withApp } from './auth-fixture.ts';
-import { boundedStep, untilAborted } from './auth-tcp-fixture.ts';
+import { boundedStep, untilAborted, withApp } from './auth-fixture.ts';
 import { rejectedUpgrade } from './gateway-http-fixture.ts';
 import { instanceToken, instanceTokenHash, seedInstance } from './instance-token-fixture.ts';
 import { startModelUpstream } from './model-upstream-fixture.ts';
@@ -71,6 +70,9 @@ interface ProxyOptions {
   readonly host?: string;
   readonly status?: 'running' | 'starting' | 'stopped';
   readonly userStatus?: 'active' | 'disabled';
+  readonly teardownDeadline?: number;
+  /** Probe only: an `onClose` hook, registered before `listen`, that waits for this promise. */
+  readonly closeHold?: Promise<void>;
 }
 
 /**
@@ -93,6 +95,8 @@ async function withProxy(
       });
       if (options.configured !== false)
         writeSettings(database, { ragflowBaseUrl: upstream.origin, ragflowApiKey: RAGFLOW_KEY });
+      const hold = options.closeHold;
+      if (hold !== undefined) app.addHook('onClose', () => hold);
       const base = await app.listen({ host: '127.0.0.1', port: 0 });
       const texts: string[] = [];
       const send = async (path: string, init: RequestInit = {}): Promise<Answer> => {
@@ -111,7 +115,12 @@ async function withProxy(
     false,
     options.trustedProxies ?? [],
     resolveUpstream,
-    { upstreamMode: options.upstreamMode ?? 'network' },
+    {
+      upstreamMode: options.upstreamMode ?? 'network',
+      ...(options.teardownDeadline === undefined
+        ? {}
+        : { teardownDeadline: options.teardownDeadline }),
+    },
   );
 }
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
@@ -231,7 +240,8 @@ it('ignores a platform session cookie that accompanies a valid token', async () 
 });
 
 it('answers every rejection reason with one byte-identical 401 and no RAGFlow request', async () => {
-  // Each request is cut to this deadline, one app before the budget: the last close stays inside.
+  // Each request is cut to this deadline, one app before the budget; the last app's teardown close,
+  // bounded by withApp's TEARDOWN_CLOSE_MS, falls inside that app.
   const deadline = performance.now() + CASE_MS - APP_MS;
   const answers: Answer[] = [];
   for (const [label, options, request] of rejections)
@@ -335,30 +345,72 @@ it('answers a token store failure with the fixed 500, not a rejected token', asy
 // answered by that timer instead of the close fails here.
 const CLOSE_ABORT_MS = 5_000;
 
+/** Closes the app under an in-flight version read; every step is cut to `deadline`. */
+async function closeAbort(
+  { send, token, app }: Proxy,
+  deadline: number,
+): Promise<{ answer: Answer; elapsed: number }> {
+  const pending = boundedStep('close-abort: pending answer', deadline, (signal) =>
+    send(VERSION, { headers: bearer(token), signal }),
+  );
+  // A step that fails before the answer is awaited leaves this rejection observed, not unhandled.
+  pending.catch(() => undefined);
+  await boundedStep('close-abort: upstream received', deadline, (signal) =>
+    untilAborted(upstream.received(1), signal),
+  );
+  const started = performance.now();
+
+  await boundedStep('close-abort: application close', deadline, (signal) =>
+    untilAborted(app.close(), signal),
+  );
+  const answer = await pending;
+  await boundedStep('close-abort: upstream socket closed', deadline, (signal) =>
+    untilAborted(upstream.socketClosed(1), signal),
+  );
+  return { answer, elapsed: performance.now() - started };
+}
+
 it('application close aborts an in-flight version read with the fixed 500', async () => {
   upstream.setHandler(() => undefined);
-  await withProxy(async ({ send, token, app }) => {
-    // Every step is cut to this deadline, one app before the budget: the teardown close stays inside.
-    const deadline = performance.now() + CASE_MS - APP_MS;
-    const pending = boundedStep('close-abort: pending answer', deadline, (signal) =>
-      send(VERSION, { headers: bearer(token), signal }),
-    );
-    // A step that fails before the answer is awaited leaves this rejection observed, not unhandled.
-    pending.catch(() => undefined);
-    await boundedStep('close-abort: upstream received', deadline, (signal) =>
-      untilAborted(upstream.received(1), signal),
-    );
-    const started = performance.now();
+  // Steps end one app before the budget; the teardown close gets half of that app and the report
+  // the other half. A close that never finishes is cut there too, so the case still fails by name.
+  const deadline = performance.now() + CASE_MS - APP_MS;
 
-    await boundedStep('close-abort: application close', deadline, (signal) =>
-      untilAborted(app.close(), signal),
-    );
-    const answer = await pending;
-    await boundedStep('close-abort: upstream socket closed', deadline, (signal) =>
-      untilAborted(upstream.socketClosed(1), signal),
-    );
+  await withProxy(
+    async (proxy) => {
+      const { answer, elapsed } = await closeAbort(proxy, deadline);
 
-    expect(performance.now() - started).toBeLessThan(CLOSE_ABORT_MS);
-    expect([answer.status, JSON.parse(answer.body)]).toEqual([500, FAILURE]);
+      expect(elapsed).toBeLessThan(CLOSE_ABORT_MS);
+      expect([answer.status, JSON.parse(answer.body)]).toEqual([500, FAILURE]);
+    },
+    { teardownDeadline: deadline + APP_MS / 2 },
+  );
+});
+
+it('names the close-abort step when the application close never finishes', async () => {
+  upstream.setHandler(() => undefined);
+  const hold = Promise.withResolvers<undefined>();
+  let closed: (() => Promise<void>) | undefined;
+  onTestFinished(async () => {
+    hold.resolve(undefined);
+    await closed?.();
   });
+  // A budget of its own, so the probe costs about 5s rather than the case's 20s.
+  const deadline = performance.now() + 2 * APP_MS;
+
+  const failure = await withProxy(
+    async (proxy) => {
+      closed = () => proxy.app.close();
+      await closeAbort(proxy, deadline);
+    },
+    { closeHold: hold.promise, teardownDeadline: deadline + APP_MS / 2 },
+  ).then(
+    () => new Error('expected the close-abort case to fail'),
+    (error: unknown) => error,
+  );
+
+  expect(performance.now()).toBeLessThan(deadline + APP_MS);
+  expect(failure).toBeInstanceOf(Error);
+  expect(String(failure)).toMatch(/^Error: close-abort: application close: TimeoutError: /);
+  expect(String(failure)).toContain('; teardown: application close: TimeoutError: ');
 });

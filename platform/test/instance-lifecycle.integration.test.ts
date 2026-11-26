@@ -13,7 +13,7 @@ import { expect, it } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
 import { createDockerClient, createInstanceService } from '../src/orchestrator/index.ts';
-import { boundedStep } from './auth-tcp-fixture.ts';
+import { boundedStep } from './auth-fixture.ts';
 import {
   START_CONTAINER,
   startupBarrier,

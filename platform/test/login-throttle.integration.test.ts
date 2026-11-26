@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryAuditEvents } from '../src/audit/index.ts';
-import { sessionCookieHeader, snapshotAuthState } from './auth-fixture.ts';
+import { boundedStep, sessionCookieHeader, snapshotAuthState } from './auth-fixture.ts';
 import {
-  boundedStep,
   getIdentity,
   LOOPBACK_ADDRESSES,
   PASSWORD,

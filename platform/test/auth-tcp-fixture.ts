@@ -113,42 +113,6 @@ export async function getIdentity(
   return fetch(`${baseUrl}${IDENTITY_PATH}`, { headers: { cookie }, signal });
 }
 
-/**
- * One request of a case, cut to the case's deadline on the monotonic clock (`performance.now()`:
- * some cases fake `Date`). A stall or a failure is rethrown naming the step, never as the runner's
- * bare timeout.
- */
-export async function boundedStep<T>(
-  step: string,
-  deadline: number,
-  request: (signal: AbortSignal) => Promise<T>,
-): Promise<T> {
-  const remaining = Math.floor(deadline - performance.now());
-  if (remaining <= 0) throw new Error(`${step}: case deadline passed before it started`);
-  try {
-    return await request(AbortSignal.timeout(remaining));
-  } catch (error) {
-    throw new Error(`${step}: ${String(error)}`, { cause: error });
-  }
-}
-
-/**
- * A wait that takes no signal, rejected with the signal's reason once it aborts, so `boundedStep`
- * can cut it. The wait itself keeps running; its later settlement is observed here.
- */
-export function untilAborted<T>(wait: Promise<T>, signal: AbortSignal): Promise<T> {
-  const { promise, resolve, reject } = Promise.withResolvers<T>();
-  const aborted = () => {
-    reject(signal.reason as Error);
-  };
-  signal.addEventListener('abort', aborted, { once: true });
-  if (signal.aborted) aborted();
-  void wait.then(resolve, reject).finally(() => {
-    signal.removeEventListener('abort', aborted);
-  });
-  return promise;
-}
-
 export async function registerAccount(
   app: FastifyInstance,
   email: string,
