@@ -34,20 +34,23 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...original, realpathSync, default: { ...original, realpathSync } };
 });
 
-// Docker-free: an echoing Node child stands in for the CLI so its stdin becomes observable.
-const echo = vi.hoisted(() => ({ enabled: false }));
+// Docker-free: a Node child script stands in for the CLI so its stdin handling becomes observable.
+const standIn = vi.hoisted(() => ({ script: undefined as string | undefined }));
+const ECHO = 'process.stdin.pipe(process.stdout)';
+// Exits on its own once `done` is written, never reading stdin.
+const UNREAD = "process.stdout.write('done')";
 vi.mock('node:child_process', async (importOriginal) => {
   const original = await importOriginal<typeof ChildProcess>();
   // The overloaded signature cannot be restated; this forwards the one form docker-command uses.
   const spawn = ((file: string, args: string[], options: ChildProcess.SpawnOptions) =>
-    echo.enabled
-      ? original.spawn(process.execPath, ['-e', 'process.stdin.pipe(process.stdout)'], options)
-      : original.spawn(file, args, options)) as typeof original.spawn;
+    standIn.script === undefined
+      ? original.spawn(file, args, options)
+      : original.spawn(process.execPath, ['-e', standIn.script], options)) as typeof original.spawn;
   return { ...original, spawn, default: { ...original, spawn } };
 });
 
 afterEach(() => {
-  echo.enabled = false;
+  standIn.script = undefined;
   host.platform = 'darwin';
   host.docker = undefined;
   host.resolved.length = 0;
@@ -133,7 +136,7 @@ it('neither writes nor throws when the private configuration directory is unwrit
 });
 
 it('writes the declared input to a live command and closes stdin empty otherwise', async () => {
-  echo.enabled = true;
+  standIn.script = ECHO;
   await privateConfig(async (directory) => {
     const { commandAsync } = createDockerCommands('/', directory, true);
 
@@ -144,6 +147,22 @@ it('writes the declared input to a live command and closes stdin empty otherwise
       piped: { status: 0, stdout: 'stdin-only', stderr: '' },
       plain: { status: 0, stdout: '', stderr: '' },
     });
+  });
+});
+
+it('answers a live command that exits without reading a large input, with no uncaught pipe error', async () => {
+  standIn.script = UNREAD;
+  await privateConfig(async (directory) => {
+    const { commandAsync } = createDockerCommands('/', directory, true);
+
+    // Far above a pipe's buffer: the child exits long before its stdin could take it all (#733).
+    const result = await commandAsync(
+      ['exec', '-i', 'holder', 'node'],
+      10_000,
+      'x'.repeat(8 * 1024 * 1024),
+    );
+
+    expect(result).toEqual({ status: 0, stdout: 'done', stderr: '' });
   });
 });
 

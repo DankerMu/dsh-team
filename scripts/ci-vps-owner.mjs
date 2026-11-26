@@ -257,6 +257,7 @@ async function prepare() {
     'platform/test/ci-vps-worker.ts',
     'platform/test/ci-vps-identity.ts',
     'platform/test/docker-cleanup.ts',
+    'platform/test/child-input.ts',
     'platform/test/docker-command.ts',
     'scripts/probe-browser-runtime.mjs',
     'scripts/byte-listener.mjs',

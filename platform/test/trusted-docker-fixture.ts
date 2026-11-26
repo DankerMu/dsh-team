@@ -183,6 +183,7 @@ function prepareCustodyRepository(
     'scripts/docker-command.mjs',
     'scripts/verification-producer.mjs',
     'scripts/verification-producer-exit.py',
+    'platform/test/child-input.ts',
     'platform/test/docker-command.ts',
     'platform/test/docker-cleanup.ts',
     ...readdirSync(join(sourceRoot, 'scripts'))
