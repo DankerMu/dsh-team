@@ -17,9 +17,9 @@
 
 Write each probe first and record its red output against the unchanged fixture, then change the fixture.
 
-- [ ] 1.1a Non-stall probe. Add a test-only option to `observerScenarioSource` that binds the create's deadline signal to a variable, busy-waits for more than 200 ms, and only then calls `client.json(…, signal)`. The delay therefore runs after the deadline exists and before the request is written. Run the non-stall case with this option. Before the change it is red with `ABORT_ERR`, engine `received: null` and `requests: []`. After the change it is green.
-- [ ] 1.1b Stall attribution probe. Write a dedicated committed test modelled on `:278`, not an `it.each` row: the stall source with the same injected delay, so its 200 ms abort fires before the request is sent. It asserts `code: 1, signal: null`, a non-null `childTiming` with `called <= issued <= settled`, and `engine.received: null`. Before the change it is red with `childTiming: null`.
-- [ ] 1.2 Split the create deadline: 2000 ms for non-stall cases, with a comment citing #746 and 212 ms; 200 ms kept for the stall case. Add the stall-path timing and attribution.
+- [x] 1.1a Non-stall probe. Add a test-only option to `observerScenarioSource` that binds the create's deadline signal to a variable, busy-waits for more than 200 ms, and only then calls `client.json(…, signal)`. The delay therefore runs after the deadline exists and before the request is written. Run the non-stall case with this option. Before the change it is red with `ABORT_ERR`, engine `received: null` and `requests: []`. After the change it is green.
+- [x] 1.1b Stall attribution probe. Write a dedicated committed test modelled on `:278`, not an `it.each` row: the stall source with the same injected delay, so its 200 ms abort fires before the request is sent. It asserts `code: 1, signal: null`, a non-null `childTiming` with `called <= issued <= settled`, and `engine.received: null`. Before the change it is red with `childTiming: null`.
+- [x] 1.2 Split the create deadline: 2000 ms for non-stall cases, with a comment citing #746 and 212 ms; 200 ms kept for the stall case. Add the stall-path timing and attribution.
 
 ## 2. Verification
 

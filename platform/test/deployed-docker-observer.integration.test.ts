@@ -59,6 +59,8 @@ import { createDockerClient as createFixtureDockerClient } from '../src/orchestr
 import { observerScenarioInputs } from './deployed-docker-engine-fixture.ts';
 import type { FixturePlatform } from './deployed-docker-engine-fixture.ts';
 
+// Longer than the stall case's 200 ms create deadline.
+const SLOW_SUBMISSION_MS = 250;
 let emittedClient: Readonly<{ javascript: string; sourceMap: string }>;
 beforeAll(() => {
   emittedClient = compileDockerClient();
@@ -80,7 +82,14 @@ it.each([
     stalls: false,
     containerMode: true,
   },
-])('$name', async ({ stalls, containerMode }) => {
+  {
+    // #746: CI measured 212 ms of synchronous submission work before the create was written.
+    name: 'settles a non-stalling create after slow synchronous submission work',
+    stalls: false,
+    containerMode: false,
+    submissionDelayMs: SLOW_SUBMISSION_MS,
+  },
+])('$name', async ({ stalls, containerMode, submissionDelayMs }) => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-obs-'));
   const scenario = observerScenarioInputs(directory, stalls);
   const { socket, sentinelId, platformInspect, sentinel, resources, createPath } = scenario;
@@ -93,6 +102,7 @@ it.each([
       scenario,
       stalls,
       containerMode,
+      submissionDelayMs,
     );
     const outcome = await runObserverChild(reserved, source, {
       bindingGate: dispatched.promise,
@@ -310,6 +320,42 @@ it('retains real create-deadline evidence when a non-stalling child create is ab
       responseClosed: expect.any(Number) as number,
       responseFinished: null,
     });
+  } finally {
+    await closeObserverScenario(directory, scenario);
+  }
+});
+
+it('reports child create timing when a stalling create aborts before the engine received it', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-obs-'));
+  const scenario = observerScenarioInputs(directory, true);
+  try {
+    const { reserved, source } = await startObserverScenario(
+      directory,
+      scenario,
+      true,
+      false,
+      SLOW_SUBMISSION_MS,
+    );
+    // The inspect then answers 404 at once instead of waiting on a binding that never comes.
+    const outcome = await runObserverChild(reserved, source, {
+      bind: false,
+      releaseResponse: () => {
+        scenario.bound.resolve(undefined);
+      },
+    });
+    const formatted = formatObserverCreateDiagnostic(outcome, scenario.evidence());
+    const diagnostic = JSON.parse(formatted) as {
+      childTiming: { called: number; issued: number; settled: number } | null;
+      engine: Record<string, unknown>;
+    };
+
+    expect(outcome, formatted).toMatchObject({ code: 1, signal: null });
+    const timing = diagnostic.childTiming;
+    expect(timing, formatted).not.toBeNull();
+    if (timing === null) throw new Error('Child create timing missing');
+    expect(timing.called).toBeLessThanOrEqual(timing.issued);
+    expect(timing.issued).toBeLessThanOrEqual(timing.settled);
+    expect(diagnostic.engine).toMatchObject({ received: null, persisted: false });
   } finally {
     await closeObserverScenario(directory, scenario);
   }
@@ -579,6 +625,7 @@ async function startObserverScenario(
   scenario: ObserverScenarioInputs,
   stalls: boolean,
   containerMode: boolean,
+  submissionDelayMs?: number,
 ) {
   const { socket, platformInspect, server } = scenario;
   initializeVerificationSubmissions(directory);
@@ -616,6 +663,7 @@ async function startObserverScenario(
     name: scenario.name,
     inspectPath: scenario.inspectPath,
     deletePath: scenario.deletePath,
+    submissionDelayMs,
   });
   return { assessmentRequest, clientPath, reserved, digest, source };
 }
