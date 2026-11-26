@@ -170,9 +170,10 @@ export const TEARDOWN_CLOSE_MS = 1000;
 
 /**
  * Closes `app` within `deadline` and reports a close that does not settle as the teardown's
- * failure. A failure of the body stays first: its `Error` message gets the teardown's appended.
- * An abandoned close keeps its hook and the app's SQLite handle (`app.ts` `onClose`) queued in this
- * worker; the case then always fails, never continues silently.
+ * failure. A failure of the body stays first: an `Error` gets the teardown's appended to its
+ * message (unless frozen), any other value is rethrown unchanged. An abandoned close keeps its hook
+ * and the app's SQLite handle (`app.ts` `onClose`) queued in this worker; the case then always
+ * fails, never continues silently.
  */
 async function closeWithin(
   app: FastifyInstance,
@@ -185,8 +186,20 @@ async function closeWithin(
     );
   } catch (error) {
     if (failure === undefined) throw error;
+    if (!(failure.error instanceof Error)) return;
     // `boundedStep` rethrows every failure as an `Error` naming its step.
-    if (failure.error instanceof Error) failure.error.message += `; ${(error as Error).message}`;
+    const value = `${failure.error.message}; ${(error as Error).message}`;
+    try {
+      // An own property, since a `DOMException`'s `message` is a getter that rejects assignment.
+      Object.defineProperty(failure.error, 'message', {
+        value,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+    } catch {
+      // A frozen error takes no property; it is rethrown unchanged, its failure still first.
+    }
   }
 }
 

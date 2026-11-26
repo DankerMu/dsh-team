@@ -21,6 +21,8 @@ Write each probe first and record its red output, then change the code.
 - [x] 1.2 Move `boundedStep`/`untilAborted` into `auth-fixture.ts` and update their import sites; `withApp` `options.teardownDeadline`, bounded teardown, failure composition (append + same object); local `withProxy` forwards `teardownDeadline`; close-abort case passes `teardownDeadline = deadline + APP_MS / 2`; comments at `:234`, `:341` corrected.
 - [x] 1.3 Measure `withApp`'s close durations under load (≥ 13, < 67) with temporary instrumentation writing to the session scratchpad; set `TEARDOWN_CLOSE_MS` = max over `pnpm test:integration` and `pnpm test` × 2, rounded up to 50 ms; basis (both lanes) in its comment; instrumentation removed before commit.
 
+- [x] 1.4 Review round 1 fix pass: a case pinning `teardownDeadline` (a deadline clearly later than the default fails at that deadline, not the default); a `DOMException` primary with a hung close is rethrown as the same object (red before); case C also asserts the healthy app was closed.
+
 ## 2. Verification
 
 - [x] 2.1 Touched files, then `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code`, `pnpm duplicate-code`, `pnpm lint:tests`: exit 0.
