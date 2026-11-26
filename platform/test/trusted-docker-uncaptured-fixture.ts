@@ -176,8 +176,8 @@ async function scannedCommand(pid: number, custody: UncapturedCustody) {
 }
 
 /**
- * Whether a gone owner's own result.json, validated for this invocation and its manifest, records
- * a settled command: its group was observed absent after close, and a gone group cannot return.
+ * Whether the owner's own result.json, validated for this invocation and its manifest, records a
+ * settled command: its group was observed absent after close, and a gone group cannot return.
  */
 async function settledResult(root: string, invocation: unknown) {
   if (typeof invocation !== 'string' || !INVOCATION_PATTERN.test(invocation)) return false;
@@ -189,8 +189,9 @@ async function settledResult(root: string, invocation: unknown) {
 type BoundCommand = { readonly finished: true } | { readonly child: Identity | undefined };
 
 /**
- * The command an owner started: its receipt, or, while it is stopped, its scanned child. A gone
- * owner without a receipt is bound only when its validated result.json records a settled command.
+ * The command an owner started: its receipt, or, while it is stopped, its scanned child. With no
+ * receipt and no command observable, a stopped owner's clean scan or a gone owner is bound as
+ * finished only when its validated result.json records a settled command.
  */
 async function boundCommand(
   owner: Identity,
@@ -205,9 +206,15 @@ async function boundCommand(
     return {
       child: Object.freeze({ ...record(record(JSON.parse(readFileSync(receipt, 'utf8'))).owner) }),
     };
-  if (stopped) return { child: await scannedCommand(pid, custody) };
-  // A missing, unreadable, invalid or unsettled result keeps the authority, as no result does.
-  if (await settledResult(root, invocation).catch(() => false)) return { finished: true };
+  // A missing, unreadable, invalid or unsettled result finishes nothing. Under a stopped owner it is
+  // read only after a clean scan: a scanned command or an uncertain scan wins over result.json.
+  const settled = () => settledResult(root, invocation).catch(() => false);
+  if (stopped) {
+    const child = await scannedCommand(pid, custody);
+    if (child === undefined && (await settled())) return { finished: true };
+    return { child };
+  }
+  if (await settled()) return { finished: true };
   throw new UnidentifiedCommand('owner gone without receipt');
 }
 

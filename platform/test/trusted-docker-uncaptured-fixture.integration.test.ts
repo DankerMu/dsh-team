@@ -269,7 +269,7 @@ async function lateFinish(release: boolean) {
           const until = Date.now() + LATE_RESULT_MS;
           const left = () => until - Date.now();
           await waitFor(() => existsSync(result), left(), 'Released owner wrote no result.json');
-          // A live owner would be frozen and scanned instead: claimed for the wrong reason.
+          // Waits for the owner to exit so this case keeps covering the exited path.
           await waitFor(() => !ownerPresent(pids.owner), left(), 'Released owner did not exit');
         }
         const terminal = existsSync(result)
@@ -631,6 +631,37 @@ it.each<[string, Stub, string, boolean, string[], object?]>([
     true,
     gone,
   ]),
+  // A live owner's result.json is read only after a clean scan; a command or an uncertain scan wins.
+  ['live, settled result', { result: {} }, 'command finished', false, frozen, finish],
+  [
+    'live, an unsettled result',
+    { result: { command: { ...settledResult.command, settled: false } } },
+    'no command started',
+    false,
+    frozen,
+  ],
+  [
+    'live, a result of another invocation',
+    { result: { invocation: INVOCATION.replace('1', '2') } },
+    'no command started',
+    false,
+    frozen,
+  ],
+  [
+    'live, settled result, a command',
+    { rows: [owner, pnpm], result: {} },
+    'command 7',
+    false,
+    frozen,
+    scanned,
+  ],
+  [
+    'live, settled result, ambiguous',
+    { rows: [owner, child(7, 7, 'sh')], result: {} },
+    unbound('ambiguous child 7'),
+    true,
+    frozen,
+  ],
   [
     'gone, receipt and result',
     { live: [false], receipt: true, result: {} },

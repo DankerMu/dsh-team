@@ -16,9 +16,9 @@ See `design.md` § Must preserve.
 
 Write each row first and record its red output, then change the code.
 
-- [ ] 1.1 Rows 1–4 in the `claims an uncaptured owner` table (design § Required evidence). Row 1 red before; rows 2–4 green both.
-- [ ] 1.2 `boundCommand`: on a stopped owner whose scan returns a clean `none`, `settledResult` decides `finished`.
-- [ ] 1.3 Update the comments the fix makes wrong (design § Must add/change): `settledResult` and `boundCommand` docstrings, `boundCommand`'s inline comment, `lateFinish`'s comment.
+- [x] 1.1 Rows 1–4 in the `claims an uncaptured owner` table (design § Required evidence). Row 1 red before; rows 2–4 green both.
+- [x] 1.2 `boundCommand`: on a stopped owner whose scan returns a clean `none`, `settledResult` decides `finished`.
+- [x] 1.3 Update the comments the fix makes wrong (design § Must add/change): `settledResult` and `boundCommand` docstrings, `boundCommand`'s inline comment, `lateFinish`'s comment.
 
 ## 2. Verification
 
