@@ -676,6 +676,41 @@ describe('asynchronous Docker process lifetime', () => {
     });
   });
 
+  it('kills a never-exiting child whose stdin fails and settles with that error before the timeout', async () => {
+    await withCommands(async ({ commandAsync }) => {
+      const escaped: unknown[] = [];
+      const record = (failure: unknown) => escaped.push(failure);
+      process.on('uncaughtException', record);
+      process.on('unhandledRejection', record);
+      try {
+        const started = performance.now();
+        const pending = commandAsync(['setInterval(() => {}, 1000)'], 10_000, 'input');
+        const child = subprocesses.at(-1);
+        child?.stdin?.destroy(Object.assign(new Error('stand-in EIO'), { code: 'EIO' }));
+
+        const result = await pending;
+        const prompt = performance.now() - started < 5_000;
+
+        expect({ result, prompt, killed: child?.signalCode, escaped }).toEqual({
+          result: {
+            status: null,
+            stdout: '',
+            stderr: '',
+            // An asymmetric matcher is typed `any`; it stands for the stdin error here.
+            error: expect.objectContaining({ code: 'EIO' }) as unknown,
+            signal: 'SIGKILL',
+          },
+          prompt: true,
+          killed: 'SIGKILL',
+          escaped: [],
+        });
+      } finally {
+        process.off('uncaughtException', record);
+        process.off('unhandledRejection', record);
+      }
+    });
+  }, 15_000);
+
   it('preserves successful output and supplies EOF when no subprocess input is provided', async () => {
     await withCommands(async ({ commandAsync }) => {
       const result = await commandAsync(

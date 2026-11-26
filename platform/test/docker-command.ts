@@ -10,6 +10,7 @@ import {
   selectDockerExecution,
 } from '../../scripts/docker-command.mjs';
 import type { DockerExecution } from '../../scripts/docker-command.mjs';
+import { endInput } from './child-input.ts';
 
 export interface DockerCommandResult {
   readonly status: number | null;
@@ -222,20 +223,27 @@ export function createDockerCommands(
     if (injectedCommand !== undefined)
       return Promise.resolve().then(() => injectedCommand(args, timeout));
     const options = processOptions(repositoryRoot, config, bounded, args, timeout);
-    const { promise, resolve } = Promise.withResolvers<DockerCommandResult>();
     // Native spawn timeout cannot itself tell us whether closure has settled.
     const child = spawn(execution.file, execution.args, { cwd: options.cwd, env: options.env });
-    // Write any declared input, then close: never leave a writable stdin pipe open.
-    child.stdin.end(input);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let bytes = 0;
     let error: Error | undefined;
-    function terminate(code: 'ETIMEDOUT' | 'ENOBUFS'): void {
+    /** The first termination cause wins; the child is killed so its closure stays bounded. */
+    function terminate(failure: Error): void {
       if (error !== undefined) return;
-      error = Object.assign(new Error(`Docker process failed: ${code}`), { code });
+      error = failure;
       child.kill(options.killSignal);
     }
+    const exceeded = (code: 'ETIMEDOUT' | 'ENOBUFS') => {
+      terminate(Object.assign(new Error(`Docker process failed: ${code}`), { code }));
+    };
+    // Write any declared input, then close: never leave a writable stdin pipe open. A child that
+    // exits unread is no failure; any other stdin error means the input never arrived.
+    const ended = endInput(child.stdin, input).catch((failure: unknown) => {
+      // endInput rejects only with the stdin stream's own error.
+      terminate(failure as Error);
+    });
     function collect(chunks: Buffer[], chunk: Buffer): void {
       if (error !== undefined) return;
       const available = options.maxBuffer - bytes;
@@ -245,13 +253,13 @@ export function createDockerCommands(
       } else {
         if (available > 0) chunks.push(chunk.subarray(0, available));
         bytes = options.maxBuffer;
-        terminate('ENOBUFS');
+        exceeded('ENOBUFS');
       }
     }
     const timer =
       timeout > 0
         ? setTimeout(() => {
-            terminate('ETIMEDOUT');
+            exceeded('ETIMEDOUT');
           }, timeout)
         : undefined;
     child.stdout.on('data', (chunk: Buffer) => {
@@ -263,18 +271,21 @@ export function createDockerCommands(
     child.once('error', (failure: Error) => {
       error ??= failure;
     });
-    child.once('close', (status: number | null, signal: NodeJS.Signals | null) => {
-      clearTimeout(timer);
-      resolve({
-        // Spawn failure may report a negative errno rather than an actual exit status.
-        status: error === undefined ? status : null,
-        stdout: Buffer.concat(stdout).toString('utf8'),
-        stderr: Buffer.concat(stderr).toString('utf8'),
-        ...(error === undefined ? {} : { error }),
-        ...(signal === null ? {} : { signal }),
+    const closed = new Promise<readonly [number | null, NodeJS.Signals | null]>((resolve) => {
+      child.once('close', (status: number | null, signal: NodeJS.Signals | null) => {
+        clearTimeout(timer);
+        resolve([status, signal]);
       });
     });
-    return promise;
+    // Node's child closure does not wait for stdin; settle once both have.
+    return Promise.all([closed, ended]).then(([[status, signal]]) => ({
+      // Spawn failure may report a negative errno rather than an actual exit status.
+      status: error === undefined ? status : null,
+      stdout: Buffer.concat(stdout).toString('utf8'),
+      stderr: Buffer.concat(stderr).toString('utf8'),
+      ...(error === undefined ? {} : { error }),
+      ...(signal === null ? {} : { signal }),
+    }));
   };
   const externalAsync: AsyncDockerCommand = (args, timeout, input) =>
     runDockerCommandAsync(selectDockerExecution(args), (execution) =>
