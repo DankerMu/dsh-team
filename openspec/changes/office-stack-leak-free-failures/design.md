@@ -36,7 +36,7 @@ Required evidence:
 - Lane-only failure through `withWorkFiles` still rejects with the same object (`rejects.toBe`).
 - `pnpm test:integration`; one local `pnpm test:stack` on the final head; VPS `pnpm test:docker` + `pnpm test:deploy`.
 
-Non-goals: wrapping single-failure rethrows; widening `scrub`'s token coverage; the same-name DOCX aggregate; the `knowledge-*`/`ragflow` stack fixtures; product code.
+Non-goals: wait-observation messages that are not `expect` assertions (`untilSeen` in `office-hints-stack-fixture.ts:147-152`, used at hints `:188`, `:189`, `:220`, `:280`, external `:146`, editor `:247`, `:481`, rewrite `:452`). The ones inside a `workbenchSession` body are folded by it into a `StackWorkbenchFailure` that carries only scrubbed text. The ones outside it print health or exec status, file text, enum states or provider counters, none of which carries a document key, JWT or URL query (review round 1). Also: wrapping single-failure rethrows; widening `scrub`'s token coverage; the same-name DOCX aggregate; the `knowledge-*`/`ragflow` stack fixtures; product code.
 
 Review focus:
 

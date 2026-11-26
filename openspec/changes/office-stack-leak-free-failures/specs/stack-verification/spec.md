@@ -40,7 +40,7 @@ In each case the thrown error's message SHALL carry the scrubbed text of every c
 
 ### Requirement: Stack lane assertions never print a secret
 
-An assertion in an Office or sidebar stack real-lane fixture SHALL NOT print a document key, a JWT or a URL query when it fails: not in its expected value, its received value or its message. This applies whenever a printed part is built from lane data (page, DOM or URL state, console or network records, Document Server or Docker output, administrator configuration read back) that is not first scrubbed. A check that a value is free of a secret SHALL fail without printing that secret. A single lane failure rethrown unchanged SHALL therefore carry no such secret from these assertions.
+An `expect` assertion in an Office or sidebar stack real-lane fixture SHALL NOT print a document key, a JWT or a URL query when it fails: not in its expected value, its received value or its message. This applies whenever a printed part is built from lane data (page, DOM or URL state, console or network records, Document Server or Docker output, administrator configuration read back) that is not first scrubbed. A check that a value is free of a secret SHALL fail without printing that secret. A single lane failure rethrown unchanged SHALL therefore carry no such secret from these assertions.
 
 #### Scenario: The forgotten positive control contains A's key
 
@@ -50,5 +50,5 @@ An assertion in an Office or sidebar stack real-lane fixture SHALL NOT print a d
 
 #### Scenario: An assertion message built from page state
 
-- **WHEN** an Office stack assertion whose message is built from page state fails while that state holds a document key
+- **WHEN** an Office stack `expect` assertion whose message is built from page state fails while that state holds a document key
 - **THEN** the printed message carries the key redacted
