@@ -4,6 +4,7 @@ import { inspect } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from '@playwright/test';
 import type { Browser, ElementHandle, Page, Request, Response } from '@playwright/test';
+import { expect } from 'vitest';
 import {
   EXPAND_BUTTON,
   explorerReselect,
@@ -143,6 +144,11 @@ export function everythingPrinted(error: unknown): string {
   const entries = error instanceof AggregateError ? (error.errors as unknown[]) : [];
   const inspected = inspect(error, { showHidden: true, depth: 20 });
   return [own, inspected, ...entries.map(everythingPrinted)].join('\n');
+}
+
+/** Fails, labelled, when `value`'s JSON contains `secret`; the failure never prints the secret. */
+export function expectFreeOf(value: unknown, secret: string, label: string) {
+  expect(JSON.stringify(value).includes(secret), label).toBe(false);
 }
 
 export const scrubEach = (texts: readonly string[]) => texts.map((text) => scrub(text));

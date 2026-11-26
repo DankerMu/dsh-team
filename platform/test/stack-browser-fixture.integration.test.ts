@@ -14,6 +14,7 @@ import {
   converseInWorkbench,
   DS_UNLOAD_SOURCES,
   everythingPrinted,
+  expectFreeOf,
   recordedError,
   scrub,
   scrubbedChain,
@@ -783,6 +784,24 @@ it('finds a key in an unscrubbed property, enumerable or not, and in an Aggregat
   const printed = [everythingPrinted(raw), everythingPrinted(new AggregateError([raw], 'both'))];
 
   for (const text of printed) for (const secret of LEAKED) expect(text).toContain(secret);
+});
+
+it('fails a value holding the secret with only its label, and passes one free of it', () => {
+  const label = 'positive control free of A key';
+  expectFreeOf({ listed: [] }, KEY, label);
+
+  const error: unknown = (() => {
+    try {
+      expectFreeOf({ listed: [`doc/${KEY}/x`] }, KEY, label);
+    } catch (caught: unknown) {
+      return caught;
+    }
+    return undefined;
+  })();
+
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toContain(label);
+  expect(everythingPrinted(error)).not.toContain(KEY);
 });
 
 it('folds the scrubbed cause chain into its message and keeps no cause and no raw list', () => {

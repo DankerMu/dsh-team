@@ -275,6 +275,20 @@ it('never switches or restores when Office does not start bundled', async () => 
   expect(events).toEqual([]);
 });
 
+it('prints an external address read back with its query removed', async () => {
+  const admin = await adminServer();
+  admin.state.mode = 'external';
+  admin.state.url = 'http://office.example.test/ds?token=t0ken';
+
+  const error: unknown = await officeExternalScenario(fakeLane(admin.base, []), opening([])).catch(
+    (caught: unknown) => caught,
+  );
+
+  const printed = everythingPrinted(error);
+  expect(printed).toContain('http://office.example.test/ds');
+  expect(printed).not.toContain('t0ken');
+});
+
 it('restores bundled mode when the open fails, the open failure first and no JWT in it', async () => {
   const admin = await adminServer();
   const events: string[] = [];
@@ -413,6 +427,37 @@ it('scrubs a document key and query from both the open and the restore failure',
   const printed = everythingPrinted(error);
   for (const secret of [key, 'EIO=4', secretOf(admin.calls)]) expect(printed).not.toContain(secret);
 });
+
+const SOCKET_KEY = '6b'.repeat(32);
+const socket = `${BASE}/doc/${SOCKET_KEY}/c/?EIO=4`;
+const socketShown = `${BASE}/doc/<redacted>/c/`;
+it.each([
+  [
+    'console error',
+    { consoleErrors: [BAD_GATEWAY, `WebSocket ${socket} failed`] },
+    `WebSocket ${socketShown} failed`,
+  ],
+  ['page error', { pageErrors: [`TypeError at ${socket}`] }, `TypeError at ${socketShown}`],
+])(
+  'fails on a keyed %s with the key and query redacted everywhere it prints',
+  async (_name, lists, shown) => {
+    const admin = await adminServer();
+    const events: string[] = [];
+    // The paired 502's failed GET on the fake's origin, so only the keyed entry fails the lane.
+    const browser = { ...BROWSER, failedRequests: [`GET ${admin.base}${API_JS}`], ...lists };
+
+    const error: unknown = await officeExternalScenario(
+      fakeLane(admin.base, events),
+      opening(events, { browser }),
+    ).catch((caught: unknown) => caught);
+
+    // The message carries the trace; the matcher's own `actual` carries the matched subset.
+    const printed = everythingPrinted(error);
+    expect(printed).toContain(shown);
+    for (const secret of [SOCKET_KEY, 'EIO=4']) expect(printed).not.toContain(secret);
+    expect(admin.state.mode).toBe('bundled');
+  },
+);
 
 it('fails the lane when the restore after a passing open fails', async () => {
   const admin = await adminServer();

@@ -6,7 +6,14 @@ import { gunzipSync } from 'node:zlib';
 import type { Page, Response } from '@playwright/test';
 import { expect } from 'vitest';
 import { rowQuery } from './better-sidebar-browser-fixture.mjs';
-import { element, showSidebarRows, until, workbenchSession } from './stack-browser-fixture.ts';
+import {
+  element,
+  scrub,
+  scrubbedChain,
+  showSidebarRows,
+  until,
+  workbenchSession,
+} from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence, StackSession } from './stack-browser-fixture.ts';
 
 /** One regular file of an archive, or of the instance's work directory. */
@@ -185,7 +192,7 @@ async function downloadSingle(page: Page, saved: string, timeout: number): Promi
     const aborted = failed.failure()?.errorText ?? '';
     expect(failed === response.request(), "The saved response's own request failed").toBe(true);
     expect([failed.isNavigationRequest(), aborted]).toEqual([true, 'net::ERR_ABORTED']);
-    expect(page.url(), 'No document committed').toBe(url);
+    expect(page.url() === url, `No document committed, at ${scrub(page.url())}`).toBe(true);
     return { csp, disposition: 'attachment', aborted, request: `GET ${download.url()}` };
   } finally {
     page.off('response', record);
@@ -231,7 +238,8 @@ async function archiveDownload(lane: ArchiveLane): Promise<ArchiveEvidence> {
 
 /**
  * Runs `lane` and then, whether it succeeded or failed, removes the named work-directory files and
- * checks them gone. The lane's failure stays first; a cleanup failure follows it.
+ * checks them gone. A lane failure alone is rethrown as it is. When the cleanup fails as well, one
+ * plain error: the label, then both scrubbed chains; vitest prints an aggregate's raw members.
  */
 export async function withWorkFiles<T>(
   lane: ArchiveLane,
@@ -245,7 +253,9 @@ export async function withWorkFiles<T>(
   };
   const evidence = await run().catch(async (error: unknown) => {
     await removed().catch((cleanup: unknown) => {
-      throw new AggregateError([error, cleanup], `${label} lane and cleanup failed`);
+      throw new Error(
+        scrubbedChain(new AggregateError([error, cleanup], `${label} lane and cleanup failed`)),
+      );
     });
     throw error;
   });
