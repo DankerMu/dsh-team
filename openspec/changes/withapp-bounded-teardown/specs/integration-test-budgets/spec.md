@@ -23,7 +23,7 @@ The RAGFlow proxy close-abort case, the canonical dev-stop lifecycle case's user
 
 ### Requirement: The shared application teardown close is bounded and never replaces the case's failure
 
-The integration helper that builds the platform application for a case SHALL bound its teardown close by a deadline the case passes, or by a measured default when it passes none. When the close does not settle in time, the case SHALL fail with a message naming the teardown close. The teardown deadline SHALL be separate from the deadline of the case's own steps, so a stalled step never prevents a healthy application from closing. When the case had already failed, that failure SHALL stay first: an `Error` SHALL be rethrown as the same object with the teardown failure added to its message, even when its own message cannot be assigned, and any other value SHALL be rethrown unchanged. A healthy teardown SHALL rethrow the case's failure unchanged. A case whose body leaves less than the default bound before its runner timeout MAY hit that timeout on a hung close unless it passes its own teardown deadline.
+The integration helper that builds the platform application for a case SHALL bound its teardown close by a deadline the case passes, or by a measured default when it passes none. When the close does not settle in time, the case SHALL fail with a message naming the teardown close. The teardown deadline SHALL be separate from the deadline of the case's own steps, so a stalled step never prevents a healthy application from closing. When the case had already failed, that failure SHALL stay first: an `Error` SHALL be rethrown as the same object with the teardown failure added to its message, even when that message is a read-only accessor; an `Error` that can take no property (for example a frozen one) and any other value SHALL be rethrown unchanged. A healthy teardown SHALL rethrow the case's failure unchanged. A case whose body leaves less than the default bound before its runner timeout MAY hit that timeout on a hung close unless it passes its own teardown deadline.
 
 #### Scenario: The case succeeds but its close hangs
 
@@ -32,7 +32,7 @@ The integration helper that builds the platform application for a case SHALL bou
 
 #### Scenario: The case fails and its close hangs
 
-- **WHEN** a case's body fails with an `Error` and an `onClose` hook never settles
+- **WHEN** a case's body fails with an `Error` that is not frozen and an `onClose` hook never settles
 - **THEN** the reported failure is that same error, its message starting with the body's failure and also naming the teardown close
 
 #### Scenario: A case passes its own teardown deadline
