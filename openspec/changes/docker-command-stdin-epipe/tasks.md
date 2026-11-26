@@ -2,7 +2,7 @@
 
 - **Error handling (selected).** `EPIPE` contained; a non-`EPIPE` stdin error settles the result with `error`; no unhandled rejection. Tasks 1.2, 1.3.
 - **Legacy compatibility (selected).** `holderRead`, the existing echo case (`docker-command.integration.test.ts` "writes the declared input to a live command and closes stdin empty otherwise"), every `commandAsync` caller without input, and both `localScript` callers keep their behavior. Tasks 1.1, 1.4, 2.
-- **Concurrency / ordering (selected).** Settlement joins the child's `close` and the stdin settlement; a stdin failure kills the child so the join cannot wait forever; first termination cause wins. Tasks 1.3, 1.4, 2.1 (existing `docker-version` settlement cases).
+- **Concurrency / ordering (selected).** Settlement joins the child's `close` and the stdin settlement; a stdin failure kills the child so the join cannot wait forever; first termination cause wins (guaranteed by `terminate`'s guard and the child's `error ??=`, read in review; no case combines a stdin failure with another cause). Tasks 1.3, 1.4, 2.1 (existing `docker-version` settlement cases).
 - **Resource limits / large input (selected).** 8 MB input to a non-reading child (task 1.2); timeout and output-limit termination keep `ETIMEDOUT`/`ENOBUFS` and `SIGKILL` (existing `docker-version.integration.test.ts:651-674`, task 2.1).
 - **Not selected:**
   - Public API / CLI: no entrypoint changes; `AsyncDockerCommand`'s signature is unchanged.
@@ -31,8 +31,8 @@ Write each case first and record its red output, then change the code.
 
 ## 2. Verification
 
-- [ ] 2.1 `pnpm exec vitest run --project integration platform/test/docker-command.integration.test.ts platform/test/child-input.integration.test.ts platform/test/local-script.integration.test.ts platform/test/docker-version.integration.test.ts`: exit 0.
-- [ ] 2.2 `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code`, `pnpm duplicate-code`, `pnpm lint:deps`, `pnpm lint:tests`: exit 0.
-- [ ] 2.3 One local `pnpm test:stack` on the final head (`holderRead` is its only real caller with input).
-- [ ] 2.5 CI `layer3-integration` (Linux) green on the PR head: Linux evidence for 1.2 and the `localScript` 8 MB case.
-- [ ] 2.4 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy` (Docker evidence gate).
+- [x] 2.1 `pnpm exec vitest run --project integration platform/test/docker-command.integration.test.ts platform/test/child-input.integration.test.ts platform/test/local-script.integration.test.ts platform/test/docker-version.integration.test.ts`: exit 0.
+- [x] 2.2 `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code`, `pnpm duplicate-code`, `pnpm lint:deps`, `pnpm lint:tests`: exit 0.
+- [x] 2.3 One local `pnpm test:stack` on the final head (`holderRead` is its only real caller with input).
+- [x] 2.4 CI `layer3-integration` (Linux) green on the PR head: Linux evidence for 1.2 and the `localScript` 8 MB case.
+- [ ] 2.5 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy` (Docker evidence gate).
