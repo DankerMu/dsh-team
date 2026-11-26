@@ -113,13 +113,17 @@ it('direct application close fences established HTTP and WebSocket connections b
             : undefined,
         );
         await service.start(a.id);
-        await observeHttp(readiness.reached);
+        await observeHttp(readiness.reached, undefined, 'close-fence start readiness reached');
         const clientClosed: Promise<void>[] = [];
         for (const mode of ['http', 'websocket']) {
           const socket = connect(port, '127.0.0.1');
           clients.push(socket);
           clientClosed.push(closed(socket));
-          await observeHttp(once(socket, 'connect'));
+          await observeHttp(
+            once(socket, 'connect'),
+            undefined,
+            `close-fence ${mode} client connect`,
+          );
           const read = reader(socket);
           const upgrade =
             mode === 'websocket'
@@ -128,9 +132,14 @@ it('direct application close fences established HTTP and WebSocket connections b
           socket.write(
             `GET /${mode} HTTP/1.1\r\nHost: 127.0.0.1:${String(port)}\r\nCookie: ${b.cookie}\r\n${upgrade}\r\n`,
           );
-          const header = (await observeHttp(read('\r\n\r\n'))).toString();
+          const header = (
+            await observeHttp(read('\r\n\r\n'), undefined, `close-fence ${mode} response header`)
+          ).toString();
           expect(header.startsWith(mode === 'http' ? 'HTTP/1.1 200 ' : 'HTTP/1.1 101 ')).toBe(true);
-          if (mode === 'http') expect(await observeHttp(read(6))).toEqual(Buffer.from('prefix'));
+          if (mode === 'http')
+            expect(
+              await observeHttp(read(6), undefined, 'close-fence http response prefix'),
+            ).toEqual(Buffer.from('prefix'));
         }
         let settled = false;
         const closing = app.close().then(() => {
@@ -145,7 +154,11 @@ it('direct application close fences established HTTP and WebSocket connections b
           }
         }, 'service admission fence');
         await expect(service.start(b.id)).rejects.toThrow('Instance service unavailable');
-        await observeHttp(Promise.all([...clientClosed, ...upstreamClosed]));
+        await observeHttp(
+          Promise.all([...clientClosed, ...upstreamClosed]),
+          undefined,
+          'close-fence fenced connections closed',
+        );
         expect(settled).toBe(false);
         expect(f.database.open).toBe(true);
         const fresh = await fetch(`${base}/after-close`, {
@@ -158,7 +171,7 @@ it('direct application close fences established HTTP and WebSocket connections b
         expect(fresh).toBe(false);
         expect(admissions).toBe(2);
         readiness.release();
-        await observeHttp(closing);
+        await observeHttp(closing, undefined, 'close-fence application close');
         expect(f.database.open).toBe(false);
       },
     );
@@ -274,7 +287,7 @@ async function runDevLifecycle(
     }
     const socket = join(root, 'engine.sock');
     engine.listen(socket);
-    await observeHttp(once(engine, 'listening'));
+    await observeHttp(once(engine, 'listening'), undefined, 'engine listening');
     const listener = createServer();
     listener.listen(0, '127.0.0.1');
     await once(listener, 'listening');
@@ -335,14 +348,14 @@ async function runDevLifecycle(
     // Do not interrupt a command that owns the lifecycle lock. Let it observe
     // released work, then stop any captured application before removing its files.
     mainPid ??= await pidAt(pidfile);
-    await observeHttp(Promise.allSettled(commands), settleMs);
+    await observeHttp(Promise.allSettled(commands), settleMs, 'cleanup commands settlement');
   });
   await step('main', async () => {
     const recordedPid = await pidAt(pidfile);
     if (recordedPid !== undefined) mainPid = recordedPid;
     if (mainPid !== undefined && alive(mainPid) && lifecycle !== undefined) {
       const cleanup = command(root, 'dev:stop', lifecycle.environment);
-      expect(await observeHttp(cleanup.result, 35_000)).toBe(0);
+      expect(await observeHttp(cleanup.result, 35_000, 'cleanup dev:stop exit')).toBe(0);
       await eventually(() => mainPid !== undefined && !alive(mainPid), 'cleanup main exit');
     }
   });
@@ -483,11 +496,15 @@ const OWNERSHIP_MS = 20_000;
 // at most 116ms and the start POST with its body at most 71ms; each bound is about 13x that.
 const REGISTRATION_MS = 1_500;
 const START_MS = 1_000;
+// Measured (#749) with a 60s bound, 5 full `pnpm test:integration` runs at 1-minute load 14-54:
+// the restarted dev:bg (pnpm, bash and the lock refusal, from spawn to exit) took at most 377.4ms,
+// about 5x below the 2s default. This is 10x that, rounded up to 500ms: about 10.6x.
+const RESTART_EXIT_MS = 4_000;
 // Pass path (s): ownership 20, first start 10, registration 1.5, the start POST 1, its readiness 2,
-// the shutdown fence 5, the restart 2, the stop 5, the graceful exit 5, the successor 20 and the
-// final stop 5: about 76.5. Cleanup: commands settlement 35, then dev:stop 35 and its main exit 5;
-// about 151.5 in all. The remaining 8.5 is for the unbounded setup and closure: everything before
-// the registration, ownership and first start included, took at most 8.0 in those runs.
+// the shutdown fence 5, the restart 4, the stop 5, the graceful exit 5, the successor 20 and the
+// final stop 5: about 78.5. Cleanup: commands settlement 35, then dev:stop 35 and its main exit 5;
+// about 153.5 in all. The remaining 6.5 is for the unbounded setup and closure: everything before
+// the registration, ownership and first start included, took at most 3.01 in the #749 runs.
 const OWNERSHIP_CASE_MS = 160_000;
 
 it(
@@ -511,7 +528,7 @@ it(
       await ownershipEventually(lifecycle, started, { windowMs: OWNERSHIP_MS });
       lifecycle.mainPid = await pidAt(pidfile);
       if (lifecycle.mainPid === undefined) throw new Error('Missing main PID');
-      expect(await observeHttp(started.result, 10_000)).toBe(0);
+      expect(await observeHttp(started.result, 10_000, 'first dev:bg exit')).toBe(0);
       const user = await boundedStep(
         'user registration',
         performance.now() + REGISTRATION_MS,
@@ -535,7 +552,9 @@ it(
         },
       );
       expect(response.status).toBe(200);
-      await observeHttp(readiness.reached);
+      // Measured (#749), 5 full runs at 1-minute load 14-54: the main's background requests up to
+      // the held logs GET took at most 4.7ms, so the 2s default is about 425x that.
+      await observeHttp(readiness.reached, undefined, 'start readiness reached');
       const stopped = lifecycle.run('dev:stop');
       await eventually(async () => {
         const probe = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(200) }).catch(
@@ -548,11 +567,13 @@ it(
       // A repeated SIGTERM must join the same drain, not invoke default termination.
       process.kill(lifecycle.mainPid, 'SIGTERM');
       const restarted = lifecycle.run('dev:bg');
-      expect(await observeHttp(restarted.result)).toBe(1);
+      // Measured (#749), 5 full runs at 1-minute load 14-54: at most 377.4ms to exit, so
+      // RESTART_EXIT_MS is about 10.6x that.
+      expect(await observeHttp(restarted.result, RESTART_EXIT_MS, 'restarted dev:bg exit')).toBe(1);
       expect((await pidAt(pidfile)) === lifecycle.mainPid).toBe(true);
       expect(alive(lifecycle.mainPid)).toBe(true);
       readiness.release();
-      expect(await observeHttp(stopped.result, 5_000)).toBe(0);
+      expect(await observeHttp(stopped.result, 5_000, 'held dev:stop exit')).toBe(0);
       await eventually(
         () => lifecycle.mainPid !== undefined && !alive(lifecycle.mainPid),
         'graceful main exit',
@@ -560,12 +581,12 @@ it(
       expect(await pidAt(pidfile)).toBeUndefined();
       const successor = lifecycle.run('dev:bg');
       // The successor runs the same build, preflight and health path as the first start.
-      expect(await observeHttp(successor.result, OWNERSHIP_MS)).toBe(0);
+      expect(await observeHttp(successor.result, OWNERSHIP_MS, 'successor dev:bg exit')).toBe(0);
       const successorPid = await pidAt(pidfile);
       expect(successorPid !== undefined && successorPid !== lifecycle.mainPid).toBe(true);
       lifecycle.mainPid = successorPid;
       const finalStop = lifecycle.run('dev:stop');
-      expect(await observeHttp(finalStop.result, 5_000)).toBe(0);
+      expect(await observeHttp(finalStop.result, 5_000, 'final dev:stop exit')).toBe(0);
       expect(await pidAt(pidfile)).toBeUndefined();
     });
   },
@@ -806,7 +827,9 @@ it(
       expect(induced.released).toEqual({ lock: true, running: true });
       expect(induced.surfaced.root).toBe(true);
       // Engine closure fails the held preflight; the start then settles and releases its lock.
-      expect(await observeHttp(induced.started.result, 15_000)).toBe(1);
+      expect(
+        await observeHttp(induced.started.result, 15_000, 'held start exit after engine closure'),
+      ).toBe(1);
       expect([
         existsSync(join(root, '.run/dev.lock')),
         existsSync(join(root, '.run/dev.pid')),
