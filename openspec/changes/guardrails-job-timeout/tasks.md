@@ -16,7 +16,7 @@
 
 ## 2. Verification
 
-- [ ] 2.1 `pnpm lint` (includes `lint:ci`) and `pnpm lint:agents` exit 0. Check prettier on `ci.yml`.
+- [x] 2.1 `pnpm lint` (includes `lint:ci`) and `pnpm lint:agents` exit 0. Check prettier on `ci.yml`.
 - [ ] 2.2 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`, as the docker-evidence gate requires for a non-docs change.
 - [ ] 2.3 After merge, a comment on #747 records at least 30 subsequent runs, every attempt included, with no guardrails cancellation, and shows the slowest job ended at least 2 minutes under the limit. The PR uses `Refs #747`, never `Closes` or `Fixes`, so the merge does not close the issue. This task stays unchecked at merge. If the post-merge sample shows a cancellation, or a job less than 2 minutes under the limit, the issue stays open and the work returns to re-measuring and re-fitting the limit.
 

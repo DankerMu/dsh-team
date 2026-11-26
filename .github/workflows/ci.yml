@@ -213,8 +213,9 @@ jobs:
     runs-on: ubuntu-24.04
     # Measured basis (#747): 60 consecutive CI runs (main and PR, every attempt) created
     # 2026-11-25 06:46 to 2026-11-26 17:14 UTC. `pnpm test:guardrails` step, 60 completed
-    # attempts: median 6:33, p90 9:14 (nearest rank), max 9:43. 7 attempts were cancelled
-    # at the old 10m limit; 4 were killed mid-step, the longest at 9:57 (a lower bound).
+    # attempts (3 of them job-cancelled after the step finished): median 6:33, p90 9:14 (nearest
+    # rank), max 9:43; job-success only (57): median 6:32, p90 8:42, max 9:27. 7 attempts were
+    # cancelled at the old 10m limit; 4 were killed mid-step, the longest at 9:57 (a lower bound).
     # Job overhead (job minus step) is at most 34 s.
     # Rule: max(15, ceil((1.5 * S + O) / 60)), S = 597 s, O = 34 s -> 16.
     timeout-minutes: 16
