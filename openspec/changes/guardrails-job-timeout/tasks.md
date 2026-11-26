@@ -11,8 +11,8 @@
 
 ## 1. Implementation
 
-- [ ] 1.1 Measure the fixed sample: the most recent N ≥ 30 consecutive CI runs whose guardrails job reached the step, main and PR runs together, excluding in-progress runs and skipped jobs. Read every attempt read-only through `gh api …/runs/<id>/attempts/<n>/jobs`; if attempts cannot be read, report the cancellation count as a lower bound. For each run take the step duration and the job overhead, and count cancellations. A cancelled job's step counts as at least its elapsed step time. Record the window, the sample size, the median, p90 and max, the max overhead and the number of cancellations in the PR description.
-- [ ] 1.2 Set `timeout-minutes` by the fit rule in the proposal: ⌈(1.5 × S + O) / 60⌉, and never less than 15. Put the basis in a comment above the line.
+- [x] 1.1 Measure the fixed sample: the most recent N ≥ 30 consecutive CI runs whose guardrails job reached the step, main and PR runs together, excluding in-progress runs and skipped jobs. Read every attempt read-only through `gh api …/runs/<id>/attempts/<n>/jobs`; if attempts cannot be read, report the cancellation count as a lower bound. For each run take the step duration and the job overhead, and count cancellations. A cancelled job's step counts as at least its elapsed step time. Record the window, the sample size, the median, p90 and max, the max overhead and the number of cancellations in the PR description.
+- [x] 1.2 Set `timeout-minutes` by the fit rule in the proposal: ⌈(1.5 × S + O) / 60⌉, and never less than 15. Put the basis in a comment above the line.
 
 ## 2. Verification
 
