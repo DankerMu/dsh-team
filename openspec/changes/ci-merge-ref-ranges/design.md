@@ -39,9 +39,9 @@ Required evidence (each red on main's step text or script, green after):
 - 2a: the PR adds a `.gitattributes` with `* -diff` plus a 300-line file → the real step prints `Changed lines …: 301 (limit: 400)` and exits 0 (on main: `: 0`).
 - 2b: the PR replaces a symlink with a 500-line regular file → `pr-diff-lines.sh HEAD^1 HEAD^2` run directly prints `501` (on main: `0`). Seam is the script, because 501 exceeds the 400 limit and the step would fail on the limit.
 - `pr-merge-ref.sh`: two-parent with one merge base → 0; one-parent → 1 with the fixed line; octopus → 1; criss-cross (two merge bases) → 1 with a fixed line.
-- Criss-cross through the real steps: the lockfile step (PR changes only `pnpm-lock.yaml`, main's `x/package.json` reachable from the second base) → exit 1 with the guard line (red at `d84ca86`: passes); the docs-only scope step under `pull_request` → fails, `docs_only` unset (red at `d84ca86`: `docs_only=true`); the diff-size step → fails with no count.
+- Criss-cross through the real steps: the lockfile step (PR changes only `pnpm-lock.yaml`, main's `x/package.json` reachable from the second base) → exit 1 with the guard line (red at `0bcf630`: passes); the docs-only scope step under `pull_request` → fails, `docs_only` unset (red at `0bcf630`: `docs_only=true`); the diff-size step → fails with no count.
 - All existing guardrail cases pass; `pnpm test:guardrails` exit 0.
-- CI on the PR head runs the real jobs on the real merge ref: docker-evidence, lockfile-consistency and diff-size guard all succeed.
+- CI on the PR head runs the real jobs on the real merge ref: docker-evidence's scope step and lockfile-consistency pass the guard. The size step is skipped by this PR's `diff-limit-exempt` label, so the `Guardrail self-test` job on the ubuntu runner proves `--attr-source` and the size cases.
 
 Non-goals: content-detected binaries (a PR can still add a NUL byte to a large text file and have it count 0; the issue rejected `--text`, which would count real binaries); changing `pr-range`; changing the docs-only classifier; counting deleted files; changing squash-merge settings.
 
