@@ -37,6 +37,12 @@ Measure first, then choose one of three outcomes with a fixed rule. Nothing is i
 
 `design.md` is omitted: compact level. The change is one test constant and its comment, and the outcome is chosen by the fixed rule above.
 
+## Result
+
+The measurement landed on outcome 1. The maximum was 2 ms over 3 runs at load 14.6–19.9, and 7 ms over 12 runs at load 67.3–99.6. No sample failed. `EXIT_MS` stays at 3 s, and only its comment changes.
+
+A verification run at idle load 6.72 failed the slow-marker case with `timedOut: 'exit'`, the same failure shape as #719. That run was not a measurement sample. The investigation showed a lost first SIGTERM in macOS bash 3.2 (`/bin/sh`), which no deadline value fixes. It is filed as #752, and the comment points to it.
+
 ## Triage
 
 ```text
