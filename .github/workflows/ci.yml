@@ -257,15 +257,20 @@ jobs:
       # and succeeds, so the aggregator never sees "skipped". File names are
       # PR-controlled and the runner parses `##[...]` anywhere in a line, so the
       # verdict is printed only between stop-commands markers with a fresh
-      # random token (scripts/test-guardrails.sh runs this step's text).
+      # random token (scripts/test-guardrails.sh runs this step's text). On
+      # pull_request the range is the merge ref's own HEAD^1...HEAD^2, never the
+      # payload's stale base.sha, and a non-merge HEAD fails the step (#734).
       - name: Detect documentation-only change
         id: scope
         env:
           RANGE: >-
             ${{ github.event_name == 'pull_request'
-            && format('{0}...HEAD', github.event.pull_request.base.sha)
+            && 'HEAD^1...HEAD^2'
             || format('{0}..{1}', github.event.before, github.event.after) }}
         run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            bash scripts/pr-merge-ref.sh || exit 1
+          fi
           # NUL-delimited and byte-exact (#715): without -z, git C-quotes non-ASCII
           # names. Command substitution drops NULs, so the list goes through a file.
           changed="$(mktemp)"
@@ -342,12 +347,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The PR's own paths: the merge ref's HEAD^1...HEAD^2, never the payload's
+      # stale base.sha (#734; scripts/test-guardrails.sh runs this step's text).
       - name: Check lockfile–manifest pairs
         if: "!contains(github.event.pull_request.labels.*.name, 'lockfile-refresh')"
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          changed="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          bash scripts/pr-merge-ref.sh || exit 1
+          changed="$(git diff --name-only 'HEAD^1...HEAD^2')"
           if echo "$changed" | grep -qx "pnpm-lock.yaml" &&
             ! echo "$changed" | grep -qE '(^|/)package\.json$'; then
             echo "::error::pnpm-lock.yaml changed but no package.json did. Lockfile-only changes are unreviewed dependency drift. Revert the lockfile, or add the 'lockfile-refresh' label with a justification in the PR description."
@@ -369,16 +375,13 @@ jobs:
           node-version-file: .tool-versions
       # The pull_request checkout is the merge ref: HEAD^1 is the current base tip
       # and HEAD^2 the PR head, so the payload's base.sha (not refreshed when main
-      # advances) is never used. scripts/pr-diff-lines.sh fails closed (#715).
+      # advances) is never used. scripts/pr-merge-ref.sh and scripts/pr-diff-lines.sh
+      # fail closed (#715, #734).
       - name: Enforce max PR diff lines
         if: ${{ !contains(github.event.pull_request.labels.*.name, 'diff-limit-exempt') }}
         run: |
           MAX_DIFF_LINES="$(node scripts/constraints.mjs size_limits max_pr_diff_lines)"
-          if ! git rev-parse --verify --quiet 'HEAD^2^{commit}' >/dev/null ||
-            git rev-parse --verify --quiet 'HEAD^3^{commit}' >/dev/null; then
-            echo "::error::HEAD is not a two-parent merge ref; cannot count the PR diff."
-            exit 1
-          fi
+          bash scripts/pr-merge-ref.sh || exit 1
           LINES="$(bash scripts/pr-diff-lines.sh 'HEAD^1' 'HEAD^2')" || exit 1
           case "$LINES" in '' | *[!0-9]*) echo "::error::Cannot count the PR diff." && exit 1 ;; esac
           echo "Changed lines (excluding lockfile and generated contract): $LINES (limit: $MAX_DIFF_LINES)"
