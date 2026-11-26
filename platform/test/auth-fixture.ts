@@ -122,6 +122,87 @@ export function snapshotAuthState(database: DatabaseHandle): {
   };
 }
 
+/**
+ * One request of a case, cut to the case's deadline on the monotonic clock (`performance.now()`:
+ * some cases fake `Date`). A stall or a failure is rethrown naming the step, never as the runner's
+ * bare timeout.
+ */
+export async function boundedStep<T>(
+  step: string,
+  deadline: number,
+  request: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const remaining = Math.floor(deadline - performance.now());
+  if (remaining <= 0) throw new Error(`${step}: case deadline passed before it started`);
+  try {
+    return await request(AbortSignal.timeout(remaining));
+  } catch (error) {
+    throw new Error(`${step}: ${String(error)}`, { cause: error });
+  }
+}
+
+/**
+ * A wait that takes no signal, rejected with the signal's reason once it aborts, so `boundedStep`
+ * can cut it. The wait itself keeps running; its later settlement is observed here.
+ */
+export function untilAborted<T>(wait: Promise<T>, signal: AbortSignal): Promise<T> {
+  const { promise, resolve, reject } = Promise.withResolvers<T>();
+  const aborted = () => {
+    reject(signal.reason as Error);
+  };
+  signal.addEventListener('abort', aborted, { once: true });
+  if (signal.aborted) aborted();
+  void wait.then(resolve, reject).finally(() => {
+    signal.removeEventListener('abort', aborted);
+  });
+  return promise;
+}
+
+// Default bound of withApp's teardown close: the larger lane's maximum, twice, rounded up to 50ms,
+// so a healthy close never turns a case red. Measured (#736) on Darwin 25.6.0 arm64:
+// - pnpm test:integration, 3 runs at 1-minute load 15-35: 1194 closes, at most 66ms;
+// - pnpm test (unit files under platform/src, with coverage), 2 runs at 1-minute load 17-31:
+//   1278 closes, at most 486ms (platform/src/admin/empty-body.test.ts; the next highest 43ms).
+// Accepted cost: a default-budget case that already spent 4500 of its 5000ms on one sendHttp and
+// then hangs its close may hit the runner timeout first; a case needing the attribution passes
+// teardownDeadline.
+export const TEARDOWN_CLOSE_MS = 1000;
+
+/**
+ * Closes `app` within `deadline` and reports a close that does not settle as the teardown's
+ * failure. A failure of the body stays first: an `Error` gets the teardown's appended to its
+ * message (unless frozen), any other value is rethrown unchanged. An abandoned close keeps its hook
+ * and the app's SQLite handle (`app.ts` `onClose`) queued in this worker; the case then always
+ * fails, never continues silently.
+ */
+async function closeWithin(
+  app: FastifyInstance,
+  deadline: number,
+  failure: { error: unknown } | undefined,
+): Promise<void> {
+  try {
+    await boundedStep('teardown: application close', deadline, (signal) =>
+      untilAborted(app.close(), signal),
+    );
+  } catch (error) {
+    if (failure === undefined) throw error;
+    if (!(failure.error instanceof Error)) return;
+    // `boundedStep` rethrows every failure as an `Error` naming its step.
+    const value = `${failure.error.message}; ${(error as Error).message}`;
+    try {
+      // An own property, since a `DOMException`'s `message` is a getter that rejects assignment.
+      Object.defineProperty(failure.error, 'message', {
+        value,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+    } catch {
+      // A frozen error takes no property; it is rethrown unchanged, its failure still first.
+    }
+  }
+}
+
 export async function withApp(
   run: (app: FastifyInstance, database: DatabaseHandle, lines: string[]) => Promise<void>,
   cookieSecure = false,
@@ -133,11 +214,14 @@ export async function withApp(
     publicUrl?: string;
     upstreamMode?: PlatformConfig['upstreamMode'];
     documentServer?: PlatformConfig['documentServer'];
+    /** `performance.now()` deadline of the teardown close; never the case's step deadline. */
+    teardownDeadline?: number;
   } = {},
 ): Promise<void> {
   const lines: string[] = [];
   const database = openDatabase(':memory:');
   let app: FastifyInstance | undefined;
+  let failure: { error: unknown } | undefined;
   try {
     applyMigrations(database);
     if (options.initialSettings !== undefined) writeSettings(database, options.initialSettings);
@@ -160,13 +244,16 @@ export async function withApp(
       resolveUpstream,
     );
     await run(app, database, lines);
-  } finally {
-    if (app === undefined) {
-      database.close();
-    } else {
-      await app.close();
-    }
+  } catch (error) {
+    failure = { error };
   }
+  if (app === undefined) {
+    database.close();
+  } else {
+    const deadline = options.teardownDeadline ?? performance.now() + TEARDOWN_CLOSE_MS;
+    await closeWithin(app, deadline, failure);
+  }
+  if (failure !== undefined) throw failure.error;
 }
 
 /** Undefined overrides deliberately omit a header; names are case-insensitive. */
