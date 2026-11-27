@@ -178,26 +178,105 @@
     return h('div', { style }, h('p', { style: { margin: '0 0 8px' } }, text), ...extra);
   }
 
-  /** @param {{ size: number; active: boolean }} props */
-  function PanelIcon({ size, active }) {
-    const paths = [
-      'M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5v-15Z',
-      'M5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3',
-      'M9 7.5h6M9 11h4',
-    ];
+  /** The panel's own look: rows, counts, glyphs and state notices, on DSH's variables. */
+  const SECONDARY = 'var(--dsw-alias-label-secondary)';
+  const RADIUS = 'var(--dsw-radius-md, 6px)';
+  const DIVIDER =
+    '1px solid var(--dsw-alias-border-l2, var(--dsw-alias-border-primary, currentColor))';
+  // Hover needs a rule, so the title button's background lives here and not inline.
+  const PANEL_CSS =
+    '[data-dsh-team-kb-page] [data-dsh-team-kb-dataset] > button{background:transparent}' +
+    '[data-dsh-team-kb-page] [data-dsh-team-kb-dataset] > button:hover' +
+    '{background:var(--dsw-alias-interactive-bg-hover, transparent)}';
+  const PANEL_TITLE = {
+    display: 'block',
+    boxSizing: 'border-box',
+    width: '100%',
+    height: '34px',
+    padding: '0 8px 0 28px',
+    border: 'none',
+    borderRadius: RADIUS,
+    color: 'inherit',
+    font: 'inherit',
+    fontWeight: 600,
+    textAlign: 'left',
+    cursor: 'pointer',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  };
+  const PANEL_CHEVRON = {
+    position: 'absolute',
+    top: '10px',
+    left: '8px',
+    color: SECONDARY,
+    pointerEvents: 'none',
+  };
+  const PANEL_FILE = { display: 'flex', alignItems: 'center', gap: '6px', height: '26px' };
+  const PANEL_NAME = {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  };
+  const PANEL_COUNT = { margin: '2px 0 0', color: SECONDARY, fontSize: '12px' };
+  const PANEL_NOTICE = {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: '8px',
+    margin: '8px 0',
+    color: SECONDARY,
+  };
+  const PANEL_PAGING = { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' };
+  const CHEVRON_PATHS = ['m9 6 6 6-6 6'];
+  const FILE_PATHS = [
+    'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z',
+    'M14 3v5h5',
+  ];
+  const PANEL_PATHS = [
+    'M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5v-15Z',
+    'M5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3',
+    'M9 7.5h6M9 11h4',
+  ];
+
+  /**
+   * An inline line glyph without text, hidden from assistive technology.
+   * @param {string[]} paths
+   * @param {number} size
+   * @param {number} strokeWidth
+   * @param {Record<string, string | number>} [style]
+   */
+  function glyph(paths, size, strokeWidth, style) {
     const props = {
       width: size,
       height: size,
       viewBox: '0 0 24 24',
       fill: 'none',
       stroke: 'currentColor',
-      strokeWidth: active ? 1.9 : 1.6,
+      strokeWidth,
       strokeLinecap: 'round',
       strokeLinejoin: 'round',
       'aria-hidden': true,
       focusable: 'false',
+      style,
     };
     return h('svg', props, ...paths.map((d) => h('path', { key: d, d })));
+  }
+
+  /** @param {{ size: number; active: boolean }} props */
+  function PanelIcon({ size, active }) {
+    return glyph(PANEL_PATHS, size, active ? 1.9 : 1.6);
+  }
+
+  /**
+   * A panel state's text in the shared notice look, with 「重试」 beside it when `retry` is given.
+   * @param {string} text
+   * @param {(() => void) | undefined} retry
+   */
+  function stateNotice(text, retry) {
+    const action = retry === undefined ? null : button('重试', retry);
+    return h('div', { style: PANEL_NOTICE }, h('p', { style: { margin: 0 } }, text), action);
   }
 
   /**
@@ -231,24 +310,47 @@
   }
 
   /**
-   * One page of documents with paging controls.
+   * One page of documents; the paging row only when there is more than one page.
    * @param {import('./client.types.js').KbFilesView} view
    * @param {(page: number) => void} go
    */
   function filesPage(view, go) {
     const pages = Math.max(1, Math.ceil((view.total ?? 0) / PAGE_SIZE));
+    const fileGlyph = glyph(FILE_PATHS, 14, 1.6, { flex: 'none', color: SECONDARY });
+    // The glyph has no text, so the row's text stays exactly the file name.
     const rows = (view.documents ?? []).map(({ id, name }) =>
-      h('li', { key: id, 'data-dsh-team-kb-file': id, style: { padding: '2px 0' } }, name),
+      h(
+        'li',
+        { key: id, 'data-dsh-team-kb-file': id, title: name, style: PANEL_FILE },
+        fileGlyph,
+        h('span', { style: PANEL_NAME }, name),
+      ),
     );
+    const list = h(
+      'ul',
+      { key: 'files', style: { listStyle: 'none', margin: 0, padding: 0 } },
+      ...rows,
+    );
+    if (pages <= 1) return [list];
     const paging = h(
       'div',
-      { style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' } },
+      { key: 'paging', style: PANEL_PAGING },
       button('上一页', () => go(view.page - 1), view.page <= 1),
       h('span', null, `第 ${String(view.page)} / ${String(pages)} 页`),
       button('下一页', () => go(view.page + 1), view.page >= pages),
     );
-    return [h('ul', { key: 'files', style: { margin: 0, paddingLeft: '18px' } }, ...rows), paging];
+    return [list, paging];
   }
+
+  // The field and its submit button read as one bordered group: their inner corners are square
+  // and the button's left border is the field's right one.
+  const FILTER_FIELD = {
+    flex: '1 1 120px',
+    minWidth: 0,
+    borderTopRightRadius: 0,
+    borderBottomRightRadius: 0,
+  };
+  const FILTER_SUBMIT = { borderLeftWidth: 0, borderTopLeftRadius: 0, borderBottomLeftRadius: 0 };
 
   /**
    * The file-name filter; a blank filter clears it and one over the proxy's limit is refused.
@@ -258,7 +360,7 @@
     return h(
       'form',
       {
-        style: { display: 'flex', flexWrap: 'wrap', gap: '8px', margin: '8px 0' },
+        style: { display: 'flex', flexWrap: 'wrap', margin: '8px 0' },
         /** @param {{ preventDefault(): void }} event */
         onSubmit: (event) => {
           event.preventDefault();
@@ -271,13 +373,16 @@
         value: draft,
         /** @param {{ target: { value: string } }} event */
         onChange: (event) => setDraft(event.target.value),
-        style: { ...CONTROL, flex: '1 1 160px' },
+        style: { ...CONTROL, ...FILTER_FIELD },
       }),
-      h('button', { type: 'submit', style: CONTROL }, '筛选'),
+      h('button', { type: 'submit', style: { ...CONTROL, ...FILTER_SUBMIT } }, '筛选'),
       tooLong
         ? h(
             'p',
-            { 'data-dsh-team-kb-hint': 'keywords-too-long', style: { width: '100%', margin: 0 } },
+            {
+              'data-dsh-team-kb-hint': 'keywords-too-long',
+              style: { width: '100%', margin: '4px 0 0' },
+            },
             '筛选词过长',
           )
         : null,
@@ -325,22 +430,20 @@
       setTooLong(refused);
       if (!refused) load(1, blank ? undefined : draft);
     };
-    const body =
-      view.state === 'list'
-        ? filesPage(view, (page) => load(page, view.keywords))
-        : [
-            notice(
-              FILES_TEXT[view.state],
-              view.state === 'failed' ? [button('重试', () => load(view.page, view.keywords))] : [],
-            ),
-          ];
+    const listed = view.state === 'list';
+    const retry = () => load(view.page, view.keywords);
+    const body = listed
+      ? filesPage(view, (page) => load(page, view.keywords))
+      : [stateNotice(FILES_TEXT[view.state], view.state === 'failed' ? retry : undefined)];
+    // The count and the form keep their child slots, so the field survives a reload.
     return h(
       'div',
       {
         'data-dsh-team-kb-files': datasetId,
         [STATE]: view.state,
-        style: { padding: '4px 0 12px 16px' },
+        style: { padding: '0 8px 10px 28px' },
       },
+      listed ? h('p', { style: PANEL_COUNT }, `共 ${String(view.total ?? 0)} 个文件`) : null,
       view.state === 'not-configured' ? null : filterForm({ draft, tooLong, setDraft, submit }),
       ...body,
     );
@@ -368,19 +471,21 @@
    * @param {() => void} toggle
    */
   function datasetRow({ id, name }, open, toggle) {
+    // The chevron sits beside the title button, never in it: the button's text is the name.
+    const turn = { ...PANEL_CHEVRON, transform: open ? 'rotate(90deg)' : 'none' };
     const title = h(
       'button',
-      {
-        type: 'button',
-        'aria-expanded': open,
-        onClick: toggle,
-        style: { ...CONTROL, border: 'none', padding: '0 4px', fontWeight: 600, textAlign: 'left' },
-      },
+      { type: 'button', 'aria-expanded': open, onClick: toggle, style: PANEL_TITLE },
       name,
     );
     return h(
       'li',
-      { key: id, 'data-dsh-team-kb-dataset': id },
+      {
+        key: id,
+        'data-dsh-team-kb-dataset': id,
+        style: { position: 'relative', borderBottom: DIVIDER },
+      },
+      glyph(CHEVRON_PATHS, 14, 1.8, turn),
       title,
       open ? h(DatasetFiles, { datasetId: id }) : null,
     );
@@ -435,7 +540,7 @@
             { style: { listStyle: 'none', margin: 0, padding: 0 } },
             ...view.rows.map((row) => datasetRow(row, expanded.has(row.id), () => toggle(row.id))),
           )
-        : notice(LIST_TEXT[view.state], view.state === 'failed' ? [button('重试', load)] : []);
+        : stateNotice(LIST_TEXT[view.state], view.state === 'failed' ? load : undefined);
     return h(
       'div',
       {
@@ -449,6 +554,7 @@
           fontSize: '14px',
         },
       },
+      h('style', null, PANEL_CSS),
       header,
       h('div', { 'data-dsh-team-kb-datasets': '', [STATE]: view.state }, content),
     );
