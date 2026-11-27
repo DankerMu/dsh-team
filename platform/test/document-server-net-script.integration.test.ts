@@ -30,7 +30,8 @@ const READY_MS = SETTLE_MS + DELAY_MS;
 // Exiting once held, from the SIGTERM. Measured TERM-to-exit maxima (#741), this file alone on
 // Darwin arm64 (14 cores) under bounded `yes` load: 2 ms over 3 runs at 1-minute load 13-67
 // (14.6-19.9) and 7 ms over 12 runs at load >= 67 (67.3-99.6).
-// A rare hang here is a lost SIGTERM under macOS bash 3.2 (#752), not a deadline tail.
+// The test runs dash, the image's /bin/sh (#752); #741's maxima above were measured under
+// macOS bash 3.2.
 const EXIT_MS = 3_000;
 // Both phase bounds plus the former 5 s headroom for setup and the forced group kill.
 const CASE_TIMEOUT_MS = READY_MS + EXIT_MS + 5_000;
@@ -75,7 +76,10 @@ async function holder(options: {
   const log = join(root, 'log');
   writeFileSync(log, '');
   const env = { PATH: `${root}:/usr/bin:/bin`, STUB_LOG: log, ...options.env };
-  const child = spawn('/bin/sh', [SCRIPT], {
+  // The image's /bin/sh is dash (node:24.13.1-bookworm-slim); macOS /bin/sh is bash 3.2, which
+  // occasionally loses the first SIGTERM (#752). No fallback shell: a missing dash fails the case.
+  if (!existsSync('/bin/dash')) throw new Error('/bin/dash is missing');
+  const child = spawn('/bin/dash', [SCRIPT], {
     env: { ...env, DSH_TEAM_FIREWALL_READY: ready, DSH_TEAM_IF_INET6: ifInet6 },
     detached: true,
     stdio: 'ignore',
