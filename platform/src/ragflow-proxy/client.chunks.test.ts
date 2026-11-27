@@ -126,6 +126,25 @@ it('reports a page past the end as ok with no chunks and the upstream total', as
   });
 });
 
+/** A page answer whose `doc` member is left out entirely. */
+const docless = (chunks: unknown, total: unknown = 2) =>
+  JSON.stringify({ code: 0, data: { chunks, total }, message: 'success' });
+
+// Go's encoding/json writes a nil slice as null; an empty page has no row to own.
+it.each([
+  ['null chunks with the matching document', chunkPage(null, 2)],
+  ['null chunks and a null document', chunkPage(null, 2, null)],
+  ['null chunks and no document', docless(null)],
+  ['no rows and a null document', chunkPage([], 2, null)],
+  ['no rows and no document', docless([])],
+])('reports an empty page with %s as ok with no chunks and the total', async (_label, body) => {
+  expect(await chunks(sender(() => new Response(body)))).toEqual({
+    result: 'ok',
+    total: 2,
+    chunks: [],
+  });
+});
+
 it('accepts a page exactly as long as the requested page size', async () => {
   const send = sender(() => new Response(chunkPage([chunkRow(1), chunkRow(2)], 7)));
 
@@ -168,6 +187,12 @@ it.each([
   ['a missing document', JSON.stringify({ code: 0, data: { chunks: [chunkRow(1)], total: 1 } })],
   ['a null document', chunkPage([chunkRow(1)], 1, null)],
   ['another document on an empty page', chunkPage([], 0, { ...DOC, id: 'f'.repeat(32) })],
+  ['another document beside null chunks', chunkPage(null, 2, { ...DOC, id: 'f'.repeat(32) })],
+  ['a document without fields on an empty page', chunkPage([], 2, {})],
+  ['a string document on an empty page', chunkPage([], 2, DOCUMENT)],
+  ['null chunks with a negative total', chunkPage(null, -1)],
+  ['null chunks without a total', JSON.stringify({ code: 0, data: { chunks: null, doc: DOC } })],
+  ['no chunks member', JSON.stringify({ code: 0, data: { doc: DOC, total: 0 } })],
   ['more rows than the page size', chunkPage([chunkRow(1), chunkRow(2), chunkRow(3)], 3)],
   [
     'a row without content_with_weight',

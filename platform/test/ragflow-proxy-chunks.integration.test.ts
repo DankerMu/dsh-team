@@ -48,9 +48,13 @@ function row(index: 0 | 1): Record<string, unknown> {
 
 /**
  * Answers like RAGFlow v1.0.0-rc2's bearer-checked list of one document's chunks, paging the two
- * rows; any other document or dataset is rc2's HTTP 500 with code 500.
+ * rows; any other document or dataset is rc2's HTTP 500 with code 500. `empty`, when given,
+ * replaces `chunks` and `doc` of a page without rows.
  */
-function ragflowHandler(doc: Record<string, unknown> = {}): Handler {
+function ragflowHandler(
+  doc: Record<string, unknown> = {},
+  empty?: Record<string, unknown>,
+): Handler {
   return (request, response) => {
     const answer = (status: number, body: Record<string, unknown>) => {
       response.writeHead(status, { 'content-type': 'application/json' });
@@ -66,7 +70,8 @@ function ragflowHandler(doc: Record<string, unknown> = {}): Handler {
       const size = Number(target.searchParams.get('page_size'));
       const chunks = [row(0), row(1)].slice((page - 1) * size, page * size);
       const summary = { id: DOCUMENT, dataset_id: DATASET, name: MARKER, location: MARKER, ...doc };
-      answer(200, { code: 0, data: { chunks, doc: summary, total: 2 } });
+      const data = chunks.length === 0 && empty !== undefined ? empty : { chunks, doc: summary };
+      answer(200, { code: 0, data: { ...data, total: 2 } });
     }
   };
 }
@@ -120,6 +125,34 @@ it('reads a later page and a page past the end with the upstream total', async (
       chunks: [{ content: TEXTS[1] }],
     });
     expect(JSON.parse(beyond.body)).toEqual({ result: 'ok', total: 2, chunks: [] });
+  });
+});
+
+// Go's encoding/json writes a nil slice as null; an empty page has no row to own.
+it.each([
+  ['null chunks and no document', { chunks: null }],
+  ['null chunks and a null document', { chunks: null, doc: null }],
+  ['no rows and no document', { chunks: [] }],
+])('reads a page past the end with %s as ok with no chunks', async (_label, empty) => {
+  upstream.setHandler(ragflowHandler({}, empty));
+  await withProxy(async ({ send }) => {
+    const answer = await send(`${CHUNKS}?page=3&page_size=1`);
+
+    expect([answer.status, answer.body]).toEqual([
+      200,
+      JSON.stringify({ result: 'ok', total: 2, chunks: [] }),
+    ]);
+  });
+});
+
+it('answers null chunks beside another document with upstream-error', async () => {
+  upstream.setHandler(
+    ragflowHandler({}, { chunks: null, doc: { id: OTHER, dataset_id: DATASET } }),
+  );
+  await withProxy(async ({ send }) => {
+    const answer = await send(`${CHUNKS}?page=3&page_size=1`);
+
+    expect([answer.status, answer.body]).toEqual([200, '{"result":"upstream-error"}']);
   });
 });
 

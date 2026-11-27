@@ -98,8 +98,11 @@ function textOf(node) {
   return node.children.map(textOf).join('');
 }
 
-/** The 「知识库」 page with its library list answered and POLICIES expanded on its two files. */
-async function previewPage() {
+/**
+ * The 「知识库」 page with its library list answered and POLICIES expanded on its two files.
+ * `scroller` stands in for the scrollable `[data-dsh-team-kb-page]` element.
+ */
+async function previewPage(scroller = { scrollTop: 0 }) {
   globalThis[GLOBAL] = { available: true };
   const registered = [];
   plugin.apply({
@@ -115,7 +118,10 @@ async function previewPage() {
   const Page = registered.find(({ options }) => options.name === 'main').component;
   let view;
   act(() => {
-    view = create(React.createElement(Page, {}));
+    view = create(React.createElement(Page, {}), {
+      createNodeMock: (element) =>
+        element.props['data-dsh-team-kb-page'] === undefined ? null : scroller,
+    });
   });
   mounted.push(view);
   const root = () => view.root;
@@ -337,6 +343,21 @@ describe('returning to the list', () => {
     expect(field().props.value).toBe('policy');
     expect(calls).toHaveLength(5);
     expect(calls[2].url).toContain('&keywords=policy');
+  });
+
+  it('returns to the list at the scroll position it was left at', async () => {
+    const scroller = { scrollTop: 0 };
+    const page = await previewPage(scroller);
+    scroller.scrollTop = 480;
+
+    await page.open(EXPENSE);
+    await respond(2, { result: 'ok', total: 1, chunks: [{ content: 'a' }] });
+    // The hidden list no longer holds the page's height, so the browser clamps the offset.
+    scroller.scrollTop = 120;
+    await page.back();
+
+    expect(page.listShown()).toBe(true);
+    expect(scroller.scrollTop).toBe(480);
   });
 
   it('aborts an in-flight preview on return and drops its late answer', async () => {

@@ -660,6 +660,20 @@
     const [preview, setPreview] = React.useState(
       /** @type {import('./client.types.js').KbPreviewTarget | null} */ (null),
     );
+    // The list and the preview share one scroller; hiding the list clamps its offset, so the
+    // list's offset is saved on opening and restored once the list shows again.
+    const scroller = React.useRef(/** @type {{ scrollTop: number } | null} */ (null));
+    const listTop = React.useRef(/** @type {number | null} */ (null));
+    /** @param {import('./client.types.js').KbPreviewTarget} target */
+    const openPreview = (target) => {
+      listTop.current = scroller.current?.scrollTop ?? 0;
+      setPreview(target);
+    };
+    React.useEffect(() => {
+      if (preview !== null || listTop.current === null || scroller.current === null) return;
+      scroller.current.scrollTop = listTop.current;
+      listTop.current = null;
+    }, [preview]);
     const load = React.useCallback(() => {
       setList({ result: 'loading' });
       setExpanded(new Set());
@@ -697,7 +711,7 @@
             'ul',
             { style: { listStyle: 'none', margin: 0, padding: 0 } },
             ...view.rows.map((row) =>
-              datasetRow(row, expanded.has(row.id), () => toggle(row.id), setPreview),
+              datasetRow(row, expanded.has(row.id), () => toggle(row.id), openPreview),
             ),
           )
         : stateNotice(LIST_TEXT[view.state], view.state === 'failed' ? load : undefined);
@@ -705,6 +719,7 @@
       'div',
       {
         'data-dsh-team-kb-page': '',
+        ref: scroller,
         style: {
           boxSizing: 'border-box',
           height: '100%',

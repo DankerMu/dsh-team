@@ -404,10 +404,29 @@ export async function listRagflowDocuments(
   return documents === null ? { result: 'upstream-error' } : { result: 'ok', ...documents };
 }
 
+/** Whether rc2's `doc` summary names the requested document of the requested dataset. */
+const ownsPage = (doc: unknown, datasetId: string, documentId: string): boolean =>
+  typeof doc === 'object' &&
+  doc !== null &&
+  'id' in doc &&
+  'dataset_id' in doc &&
+  doc.id === documentId &&
+  doc.dataset_id === datasetId;
+
+/** rc2's Go service writes a page without rows as `chunks: null`; it is read as `[]`. */
+function nullChunksAsEmpty(answer: Answer): Answer {
+  const data = answer.data;
+  if (typeof data !== 'object' || data === null || !('chunks' in data) || data.chunks !== null)
+    return answer;
+  return { ...answer, data: { ...data, chunks: [] } };
+}
+
 /**
- * The total and texts of one chunk page, or null unless the answer names the requested document
- * of the requested dataset and every row carries a string `content_with_weight`. rc2 filters the
- * rows by document itself and gives them no document field, so ownership is checked on `doc`.
+ * The total and texts of one chunk page, or null unless every row carries a string
+ * `content_with_weight` and the answer names the requested document of the requested dataset.
+ * rc2 filters the rows by document itself and gives them no document field, so ownership is
+ * checked on `doc`. A page without rows has nothing to own, so its `doc` may be absent or
+ * null, but a present one must still match.
  */
 function chunkPage(
   answer: Answer,
@@ -415,12 +434,11 @@ function chunkPage(
   documentId: string,
   pageSize: number,
 ): { total: number; chunks: RagflowDocumentChunk[] } | null {
-  const page = pageRows(answer, 'chunks', pageSize);
-  if (page === null || !('doc' in page.data)) return null;
-  const doc = page.data.doc;
-  if (typeof doc !== 'object' || doc === null || !('id' in doc) || !('dataset_id' in doc))
-    return null;
-  if (doc.id !== documentId || doc.dataset_id !== datasetId) return null;
+  const page = pageRows(nullChunksAsEmpty(answer), 'chunks', pageSize);
+  if (page === null) return null;
+  const doc = 'doc' in page.data ? page.data.doc : undefined;
+  const unowned = page.rows.length === 0 && (doc === undefined || doc === null);
+  if (!unowned && !ownsPage(doc, datasetId, documentId)) return null;
   const chunks: RagflowDocumentChunk[] = [];
   for (const row of page.rows) {
     const content =
@@ -438,8 +456,9 @@ function chunkPage(
  * not configured and sends nothing. The IDs and page come validated from the route. Neither
  * `available` nor `keywords` is sent, so chunks disabled for retrieval are listed too. Only each
  * chunk's text leaves this function, in upstream order, and only when the whole page is valid and
- * belongs to the requested document of the requested dataset. A dataset the key cannot see
- * answers invalid-request; a missing document or dataset is rc2's HTTP 500, upstream-error.
+ * belongs to the requested document of the requested dataset (a page without rows may name no
+ * document, see chunkPage). A dataset the key cannot see answers invalid-request; a missing
+ * document or dataset is rc2's HTTP 500, upstream-error.
  */
 export async function listRagflowChunks(
   settings: RagflowConnection,

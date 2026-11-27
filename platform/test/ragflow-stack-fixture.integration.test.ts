@@ -13,6 +13,7 @@ import {
   instanceScript,
   parseInstanceOutput,
   parseRagflowStack,
+  pastTheEndChunks,
   platformEndpoint,
   platformRagflowUrl,
   ragflowOutage,
@@ -26,6 +27,7 @@ const SECRET = 'planted-secret-chunk-content';
 const POLICIES = '1'.repeat(32);
 const PRODUCTS = '2'.repeat(32);
 const MISSING = '0'.repeat(32);
+const EXPENSE = '3'.repeat(32);
 const servers: { close: () => void }[] = [];
 
 afterEach(() => {
@@ -151,14 +153,15 @@ it('reports version and dataset facts over the declared routes with the environm
   );
 });
 
-it('reports document totals and only seed file names for a keyword page', async () => {
+it('reports document totals and only seed file names and IDs for a keyword page', async () => {
   const stub = await stubPlatform(() =>
     json({
       result: 'ok',
       total: 3,
       documents: [
-        { id: POLICIES, name: 'expense-policy.txt' },
         { id: PRODUCTS, name: SECRET },
+        { id: 'not-hex', name: 'attendance-policy.txt' },
+        { id: EXPENSE, name: 'expense-policy.txt' },
       ],
     }),
   );
@@ -174,9 +177,10 @@ it('reports document totals and only seed file names for a keyword page', async 
     status: 200,
     result: 'ok',
     total: 3,
-    documents: 2,
+    documents: 3,
     files: ['expense-policy.txt'],
-    others: 1,
+    ids: [EXPENSE],
+    others: 2,
   });
   expect(stub.seen.map(({ method, url }) => ({ method, url }))).toEqual([
     {
@@ -184,6 +188,52 @@ it('reports document totals and only seed file names for a keyword page', async 
       url: `/_platform/instance-api/ragflow/datasets/${POLICIES}/documents?page=1&page_size=10&keywords=expense%20%26%20co`,
     },
   ]);
+});
+
+/** pastTheEndChunks over the real script and parser against a stub platform answering `answer`. */
+async function probePastTheEnd(answer: unknown) {
+  const stub = await stubPlatform(() => json(answer));
+  const runs: Awaited<ReturnType<typeof runScript>>[] = [];
+  const probe = pastTheEndChunks(
+    async (call) => {
+      const run = await runScript(call, stub.port);
+      runs.push(run);
+      return parseInstanceOutput(run.stdout, call.kind);
+    },
+    POLICIES,
+    EXPENSE,
+  );
+  const total = await probe.catch((error: unknown) => error);
+  for (const run of runs) expectNoLeak(run);
+  return { seen: stub.seen, total };
+}
+
+it('probes one chunk page past the end of the file and keeps its positive total', async () => {
+  const { seen, total } = await probePastTheEnd({ result: 'ok', total: 3, chunks: [] });
+
+  expect(total).toBe(3);
+  expect(seen).toEqual([
+    {
+      method: 'GET',
+      url: `/_platform/instance-api/ragflow/datasets/${POLICIES}/documents/${EXPENSE}/chunks?page=999999&page_size=20`,
+      authorization: `Bearer ${TOKEN}`,
+      contentType: undefined,
+      body: '',
+    },
+  ]);
+});
+
+it.each([
+  ['a page holding a chunk', { result: 'ok', total: 3, chunks: [{ content: SECRET }] }],
+  ['a zero total', { result: 'ok', total: 0, chunks: [] }],
+  ['no total', { result: 'ok', chunks: [] }],
+  ['no chunk list', { result: 'ok', total: 3, chunks: SECRET }],
+  ['upstream-error', { result: 'upstream-error' }],
+])('rejects a past-the-end chunk answer with %s', async (_name, answer) => {
+  const { seen, total } = await probePastTheEnd(answer);
+
+  expect(total).toBeInstanceOf(Error);
+  expect(seen).toHaveLength(1);
 });
 
 it('reports retrieval counts and exclusions without chunk content', async () => {
@@ -306,6 +356,7 @@ const DOCUMENT_FACTS = {
   total: 2,
   documents: 2,
   files: ['expense-policy.txt'],
+  ids: [EXPENSE],
   others: 0,
 };
 
@@ -333,6 +384,7 @@ it.each([
   ['a fractional count', { documents: 1.5 }],
   ['a non-seed file name', { files: ['notes.txt'] }],
   ['a null others count', { others: null }],
+  ['a non-hex file ID', { ids: ['abc'] }],
 ])('rejects document output with %s', (_name, change) => {
   const parse = () =>
     parseInstanceOutput(`${JSON.stringify({ ...DOCUMENT_FACTS, ...change })}\n`, 'documents');
