@@ -4,7 +4,8 @@
  * may give it, publishes whether the plugin is usable on this instance, and registers the browser
  * routes that forward the sidebar panel's reads to the platform's instance RAGFlow proxy, the
  * `/kb-scope` command and the `kbScope` projection that keep each Session's retrieval scope, and the
- * `knowledge_base_search` tool that retrieves within the root Session's turn snapshot.
+ * `knowledge_base_search` and `knowledge_base_list` tools, which retrieve within and list the root
+ * Session's turn snapshot.
  */
 export const name = 'dsh-team-knowledge-base';
 export const inject = ['connection'];
@@ -54,6 +55,21 @@ const OUTCOME_TEXTS = {
   'upstream-error': '知识库返回了异常结果，请稍后重试',
 };
 const RESULTS = ['ok', ...Object.keys(OUTCOME_TEXTS)];
+/** The fixed Chinese text of every list outcome but `ok`, whose text names what was listed. */
+const LIST_TEXTS = {
+  'no-scope': '本轮没有选择知识库，未列出',
+  'scope-unavailable': '无法确定本轮可以查看哪些知识库，未列出',
+  'no-datasets': '本轮没有可以查看的知识库',
+  'unknown-library': '本轮可查看的知识库中没有这个名称，请先不带库名调用以列出知识库名称',
+  'invalid-request':
+    '列出请求无效：库名和关键字不能为空、最多 256 字节，页码为 1 到 999999，关键字和页码只能与库名一起使用',
+  'not-configured': '知识库未配置，无法列出，请联系管理员',
+  timeout: '列出知识库超时，请稍后重试',
+  unavailable: '知识库暂时不可用，未能列出，请稍后重试',
+  'upstream-error': '知识库返回了异常的列表，请稍后重试',
+};
+const LIST_RESULTS = ['ok', ...Object.keys(LIST_TEXTS)];
+const LIST_PAGE_SIZE = 20;
 
 /**
  * A stored selection: null (every library, later ones included) or 0..1000 distinct IDs.
@@ -284,6 +300,30 @@ function queryFields(url) {
 }
 
 /**
+ * A file-name filter or library name as the proxy accepts `keywords`: a string, non-blank, at most
+ * 256 UTF-8 bytes. A blank filter would silently list every document.
+ * @param {unknown} text
+ * @returns {text is string}
+ */
+function isFilter(text) {
+  return (
+    typeof text === 'string' && !isBlank(text) && Buffer.byteLength(text) <= MAX_KEYWORDS_BYTES
+  );
+}
+
+/**
+ * The proxy documents path of one checked page request.
+ * @param {string} datasetId
+ * @param {string} page
+ * @param {string} pageSize
+ * @param {string | undefined} keywords
+ */
+function documentsRoute(datasetId, page, pageSize, keywords) {
+  const path = `${PROXY}/datasets/${datasetId}/documents?page=${page}&page_size=${pageSize}`;
+  return keywords === undefined ? path : `${path}&keywords=${encodeURIComponent(keywords)}`;
+}
+
+/**
  * The proxy documents path for a valid browser query, or null for anything else.
  * @param {string} url
  */
@@ -298,12 +338,8 @@ function documentsPath(url) {
   if (datasetId === undefined || !ENTRY_ID.test(datasetId)) return null;
   if (page === undefined || !PAGE.test(page)) return null;
   if (pageSize === undefined || !PAGE_SIZE.test(pageSize)) return null;
-  const query = `page=${page}&page_size=${pageSize}`;
-  const path = `${PROXY}/datasets/${datasetId}/documents?${query}`;
-  if (keywords === undefined) return path;
-  // A blank filter would silently list every document.
-  if (isBlank(keywords) || Buffer.byteLength(keywords) > MAX_KEYWORDS_BYTES) return null;
-  return `${path}&keywords=${encodeURIComponent(keywords)}`;
+  if (keywords !== undefined && !isFilter(keywords)) return null;
+  return documentsRoute(datasetId, page, pageSize, keywords);
 }
 
 /**
@@ -391,6 +427,14 @@ function answerOf(body, kind) {
   const documents = entries(record.documents);
   return documents && { result: 'ok', total, documents };
 }
+
+/**
+ * A list or documents answer without its payload: answerOf gives such a route nothing else.
+ * @param {import('./types.js').KnowledgeBaseAnswer} answer
+ */
+const failure = (answer) => ({
+  result: /** @type {import('./types.js').ProxyFailure} */ (answer.result),
+});
 
 /**
  * The whole body as bytes, or null once it exceeds `limit`. An abort cancels the read and throws.
@@ -554,13 +598,14 @@ function turnScope(projections, session) {
 }
 
 /**
- * `knowledge_base_search`, registered globally so every child Agent sees it. A root Session
- * searches its own turn snapshot; a child Agent searches the record taken when it was created or
- * resumed, never its own projection, so a delegation cannot widen the scope.
+ * The one scope resolver both tools share. A root Session uses its own turn snapshot; a child
+ * Agent uses the record taken when it was created or resumed, never its own projection, so a
+ * delegation cannot widen the scope. It registers the only `agent/created` and `agent/disposed`
+ * listeners and returns the calling Agent's record, or undefined when the scope is unknown.
  * @param {import('./types.js').SearchServices} scoped
- * @param {(question: string, scope: import('./types.js').ScopeSelection, signal: AbortSignal) => Promise<import('./types.js').SearchValue>} retrieve
+ * @returns {(agent: import('./types.js').SearchExecution['agent']) => { scope: import('./types.js').ScopeSelection } | undefined}
  */
-function searchTool(scoped, retrieve) {
+function scopeResolver(scoped) {
   /** @type {Map<string, { scope: import('./types.js').ScopeSelection }>} */
   const records = new Map();
   const unrecorded = () => {
@@ -598,6 +643,40 @@ function searchTool(scoped, retrieve) {
     session.header.origin === 'subagent'
       ? records.get(session.id)
       : turnScope(scoped.sessionProjections, session);
+  return (agent) => {
+    try {
+      return agent === undefined ? undefined : scopeOf(agent.session);
+    } catch {
+      // A broken projection or Session leaves the scope unknown; never search or list wider.
+      return undefined;
+    }
+  };
+}
+
+/** @typedef {ReturnType<typeof scopeResolver>} ScopeResolver */
+
+/**
+ * The calling Agent's scope, or the result that ends the call before any request: no record, a
+ * cancelled call, or an empty selection.
+ * @param {ScopeResolver} resolve
+ * @param {import('./types.js').SearchExecution} exec
+ * @returns {{ scope: import('./types.js').ScopeSelection } | { result: 'scope-unavailable' | 'unavailable' | 'no-scope' }}
+ */
+function callScope(resolve, exec) {
+  const record = resolve(exec.agent);
+  if (record === undefined) return { result: 'scope-unavailable' };
+  if (exec.signal.aborted) return { result: 'unavailable' };
+  if (record.scope?.length === 0) return { result: 'no-scope' };
+  return { scope: record.scope };
+}
+
+/**
+ * `knowledge_base_search`, registered globally so every child Agent sees it; it searches the
+ * calling Agent's scope as `scopeResolver` gives it.
+ * @param {ScopeResolver} resolve
+ * @param {(question: string, scope: import('./types.js').ScopeSelection, signal: AbortSignal) => Promise<import('./types.js').SearchValue>} retrieve
+ */
+function searchTool(resolve, retrieve) {
   return {
     name: 'knowledge_base_search',
     description:
@@ -635,17 +714,137 @@ function searchTool(scoped, retrieve) {
     async execute(args, exec) {
       const question = questionOf(args);
       if (question === undefined) return { result: 'invalid-question' };
-      let record;
-      try {
-        record = exec.agent === undefined ? undefined : scopeOf(exec.agent.session);
-      } catch {
-        // A broken projection or Session leaves the scope unknown; never search wider.
-        record = undefined;
-      }
-      if (record === undefined) return { result: 'scope-unavailable' };
-      if (exec.signal.aborted) return { result: 'unavailable' };
-      if (record.scope?.length === 0) return { result: 'no-scope' };
-      return retrieve(question, record.scope, exec.signal);
+      const called = callScope(resolve, exec);
+      return 'scope' in called ? retrieve(question, called.scope, exec.signal) : called;
+    },
+  };
+}
+
+const LIST_KEYS = ['library', 'keywords', 'page'];
+
+/**
+ * The list arguments: `{}`, or a `library` name with optional `keywords` and a `page` from 1 to
+ * 999999 (default 1); undefined for anything else.
+ * @param {unknown} args
+ * @returns {import('./types.js').ListArgs | undefined}
+ */
+function listArgs(args) {
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) return undefined;
+  if (!Object.keys(args).every((key) => LIST_KEYS.includes(key))) return undefined;
+  const { library, keywords, page } = /** @type {Record<string, unknown>} */ (args);
+  if (library === undefined)
+    return keywords === undefined && page === undefined ? { page: 1 } : undefined;
+  if (!isFilter(library) || (keywords !== undefined && !isFilter(keywords))) return undefined;
+  if (page === undefined) return { library, keywords, page: 1 };
+  return Number.isSafeInteger(page) && PAGE.test(String(page))
+    ? { library, keywords, page: Number(page) }
+    : undefined;
+}
+
+/**
+ * The call's file-name filter, for the text only; undefined unless the arguments carry a valid one.
+ * @param {unknown} args
+ */
+function keywordsOf(args) {
+  if (typeof args !== 'object' || args === null) return undefined;
+  const { keywords } = /** @type {{ keywords?: unknown }} */ (args);
+  return isFilter(keywords) ? keywords : undefined;
+}
+
+/**
+ * The opening line of one list outcome; names only, never an ID.
+ * @param {import('./types.js').ListValue} value
+ * @param {string | undefined} keywords the call's filter
+ */
+function listTitle(value, keywords) {
+  if (value.result !== 'ok') return LIST_TEXTS[value.result];
+  if (value.libraries !== undefined)
+    return `本轮可查看的知识库：${String(value.libraries.length)} 个`;
+  const library = `知识库「${flat(value.library ?? '')}」`;
+  const matching = keywords === undefined ? '' : `文件名包含「${flat(keywords)}」的`;
+  const { total = 0, page = 1, pages = 0 } = value;
+  if (total === 0) return `${library}中没有${matching}文件`;
+  if (value.files?.length === 0)
+    return `${library}第 ${String(page)} 页没有${matching}文件（共 ${String(total)} 个，${String(pages)} 页）`;
+  return `${library}中${matching}文件：共 ${String(total)} 个，第 ${String(page)}/${String(pages)} 页`;
+}
+
+/**
+ * The text the model gets and the expanded tool row shows: the title, one `- ` line per name
+ * (line breaks flattened, so a name cannot forge a line) and a hint while later pages remain.
+ * @param {import('./types.js').ListValue} value
+ * @param {string | undefined} keywords the call's filter
+ */
+function listText(value, keywords) {
+  const lines = [listTitle(value, keywords)];
+  for (const name of value.libraries ?? value.files ?? []) lines.push(`- ${flat(name)}`);
+  const { page = 1, pages = 0 } = value;
+  if ((value.files?.length ?? 0) > 0 && page < pages)
+    lines.push(`还有更多文件，可用 page=${String(page + 1)} 查看下一页`);
+  return lines.join('\n');
+}
+
+/**
+ * `knowledge_base_list`, registered globally after `knowledge_base_search`; it lists only the
+ * libraries in the calling Agent's scope, so an out-of-scope library reads as a missing one.
+ * @param {ScopeResolver} resolve
+ * @param {(args: import('./types.js').ListArgs, scope: import('./types.js').ScopeSelection, signal: AbortSignal) => Promise<import('./types.js').ListValue>} list
+ */
+function listTool(resolve, list) {
+  return {
+    name: 'knowledge_base_list',
+    description:
+      '列出员工为本轮选定的知识库名称；指定 library 时列出该知识库中的文件名（每页 20 个，可按文件名关键字筛选）。员工问知识库里有什么、有哪些文件时先用本工具；要查找文件里的具体内容时用 knowledge_base_search。只返回名称，不返回文件内容。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        library: {
+          type: 'string',
+          description:
+            '知识库名称，须与不带参数调用时列出的名称完全一致；不填时列出本轮可查看的知识库。',
+        },
+        keywords: {
+          type: 'string',
+          description:
+            '只列出文件名包含该关键字的文件；仅在指定 library 时可用，最多 256 字节（UTF-8）。',
+        },
+        page: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 999_999,
+          description: '文件列表的页码，从 1 开始，默认 1；仅在指定 library 时可用。',
+        },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        required: ['result'],
+        additionalProperties: false,
+        properties: {
+          result: { type: 'string', enum: LIST_RESULTS },
+          libraries: { type: 'array', items: { type: 'string' } },
+          library: { type: 'string' },
+          files: { type: 'array', items: { type: 'string' } },
+          total: { type: 'integer' },
+          page: { type: 'integer' },
+          pages: { type: 'integer' },
+        },
+      },
+      /** @param {unknown} args @param {import('./types.js').ListValue} value */
+      render: (args, value) => [{ type: 'text', text: listText(value, keywordsOf(args)) }],
+      /** @param {unknown} args @param {import('./types.js').ListValue} value */
+      presentationMeta: (args, value) => ({ ...value, title: listTitle(value, keywordsOf(args)) }),
+    },
+    // A list and a documents call of 25 seconds each; the Web composition may not enforce it.
+    timeoutMs: 60_000,
+    /** @param {unknown} args @param {import('./types.js').SearchExecution} exec */
+    async execute(args, exec) {
+      const parsed = listArgs(args);
+      if (parsed === undefined) return { result: 'invalid-request' };
+      const called = callScope(resolve, exec);
+      return 'scope' in called ? list(parsed, called.scope, exec.signal) : called;
     },
   };
 }
@@ -732,9 +931,33 @@ export function apply(ctx, config) {
       ? { result: 'ok', chunks: answer.chunks, excluded }
       : { result: 'no-results', excluded };
   };
-  // Without these services the panel and the scope control still work, without the tool.
+  /**
+   * The in-scope libraries in the proxy's order, then, for a `library`, one page of its files. A
+   * name outside the scope is matched like a missing one: no documents request either way.
+   * @type {Parameters<typeof listTool>[1]}
+   */
+  const list = async ({ library, keywords, page }, scope, signal) => {
+    const listed = await request(`${PROXY}/datasets`, 'datasets', signal);
+    if (!('datasets' in listed)) return failure(listed);
+    const visible =
+      scope === null ? listed.datasets : listed.datasets.filter(({ id }) => scope.includes(id));
+    if (visible.length === 0) return { result: 'no-datasets' };
+    if (library === undefined) return { result: 'ok', libraries: visible.map(({ name }) => name) };
+    const target = visible.find(({ name }) => name === library);
+    if (target === undefined) return { result: 'unknown-library' };
+    const path = documentsRoute(target.id, String(page), String(LIST_PAGE_SIZE), keywords);
+    const answer = await request(path, 'documents', signal);
+    if (!('documents' in answer)) return failure(answer);
+    const { total } = answer;
+    const files = answer.documents.map(({ name }) => name);
+    const pages = Math.ceil(total / LIST_PAGE_SIZE);
+    return { result: 'ok', library, files, total, page, pages };
+  };
+  // Without these services the panel and the scope control still work, without the tools.
   ctx.inject(['tools', 'sessionProjections', 'agents'], (scoped) => {
-    scoped.tools.register(searchTool(scoped, retrieve));
+    const resolve = scopeResolver(scoped);
+    scoped.tools.register(searchTool(resolve, retrieve));
+    scoped.tools.register(listTool(resolve, list));
   });
   ctx.connection.fetch.register({
     path: '/api/knowledge-base.datasets',

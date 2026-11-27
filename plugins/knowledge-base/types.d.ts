@@ -31,10 +31,11 @@ export type KnowledgeBaseAnswer =
       readonly chunks: readonly SearchChunk[];
     }
   | { readonly result: 'no-results'; readonly excluded: readonly string[] }
-  | {
-      readonly result:
-        'not-configured' | 'unavailable' | 'timeout' | 'upstream-error' | 'invalid-request';
-    };
+  | { readonly result: ProxyFailure };
+
+/** The proxy's closed failure results, shared by both routes and the retrieval. */
+export type ProxyFailure =
+  'not-configured' | 'unavailable' | 'timeout' | 'upstream-error' | 'invalid-request';
 
 interface KnowledgeBaseLogger {
   warn(format: string, ...args: unknown[]): void;
@@ -79,6 +80,39 @@ export interface SearchMeta {
   readonly chunks: readonly SearchChunk[];
 }
 
+/** The checked `knowledge_base_list` arguments; `page` defaults to 1. */
+export interface ListArgs {
+  readonly library?: string;
+  readonly keywords?: string | undefined;
+  readonly page: number;
+}
+
+type ListResult =
+  | 'ok'
+  | 'no-scope'
+  | 'scope-unavailable'
+  | 'no-datasets'
+  | 'unknown-library'
+  | 'invalid-request'
+  | 'not-configured'
+  | 'timeout'
+  | 'unavailable'
+  | 'upstream-error';
+
+/**
+ * The `knowledge_base_list` value, also its `meta` with the title added: library and file names
+ * and counts only; never a dataset or document ID.
+ */
+export interface ListValue {
+  readonly result: ListResult;
+  readonly libraries?: readonly string[];
+  readonly library?: string;
+  readonly files?: readonly string[];
+  readonly total?: number;
+  readonly page?: number;
+  readonly pages?: number;
+}
+
 /** Structural subset of the released 0.2.1-rc.2 Session the tool reads. */
 export interface SearchSession {
   readonly id: string;
@@ -98,7 +132,7 @@ export interface SearchExecution {
 /** The released 0.2.1-rc.2 `agent/created` sources (`dsh-agent` runtime types). */
 type SessionStartSource = 'startup' | 'resume' | 'clear' | 'compact';
 
-/** The services and events the retrieval tool's injection uses. */
+/** The services and events the injection of both knowledge-base tools uses. */
 export interface SearchServices {
   tools: { register(definition: object): unknown };
   sessionProjections: { stateOf(session: SearchSession, key: 'kbScope'): ScopeState | undefined };

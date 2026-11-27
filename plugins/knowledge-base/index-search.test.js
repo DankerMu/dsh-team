@@ -119,7 +119,7 @@ describe('registration', () => {
     const { tools, injected, listeners } = world();
 
     expect(injected).toContainEqual(['tools', 'sessionProjections', 'agents']);
-    expect(tools.map(({ name }) => name)).toEqual(['knowledge_base_search']);
+    expect(tools.map(({ name }) => name)).toEqual(['knowledge_base_search', 'knowledge_base_list']);
     expect([...listeners.keys()].sort()).toEqual(['agent/created', 'agent/disposed']);
   });
 

@@ -49,7 +49,7 @@ import {
 import type { PanelSessionEvidence } from './knowledge-panel-stack-fixture.ts';
 import { scopeScenario } from './knowledge-scope-stack-fixture.ts';
 import type { ScopeEvidence } from './knowledge-scope-stack-fixture.ts';
-import { searchScenario } from './knowledge-search-stack-fixture.ts';
+import { ownedList, searchAndList } from './knowledge-list-stack-fixture.ts';
 import type { SearchEvidence } from './knowledge-search-stack-fixture.ts';
 import { legacyPreviewScenario } from './legacy-preview-stack-fixture.ts';
 import type { LegacyPreviewEvidence } from './legacy-preview-stack-fixture.ts';
@@ -281,6 +281,8 @@ function ownedModel(runId: string, seedIds: readonly { id: string }[]) {
       rewrites: rewrite.ownedRewrites(),
       // #760's conversation file link, one-shot.
       link: link.ownedLink(),
+      // #763's list script, keyed by its own marker.
+      list: ownedList(),
     },
   };
 }
@@ -397,8 +399,9 @@ async function scopeLane(
 
 /**
  * The retrieval lane after the scope lane, same employee: the retrieval defaults come back first
- * (proxyAfterRestore saved threshold 1), then the delegated child searches the root's two-ID scope.
- * The provider saw no scope text or dataset ID, one delegation and one search.
+ * (proxyAfterRestore saved threshold 1), then the delegated child searches the root's two-ID scope,
+ * then two root Sessions list the libraries and files (#763). The provider saw no scope text or
+ * dataset ID, one delegation and one search.
  */
 async function searchLane(
   lifecycle: UserImageLifecycle,
@@ -414,13 +417,14 @@ async function searchLane(
   await restoreRetrievalDefaults(administrator);
   const policies = ragflow.seedIds.find(({ name }) => name === POLICIES);
   if (policies === undefined) throw new Error('Seed policies dataset ID missing');
-  const search = await searchScenario({
+  const search = await searchAndList({
     session: panelSession(lifecycle, administrator.base, employee.email),
     rpc: mappedSessionRpc(administrator.base, employee.cookie),
     policies,
     missingId: MISSING_ID,
     ids: [...ragflow.seedIds.map(({ id }) => id), MISSING_ID],
     childMarker: lane.model.provider.delegation.childMarker,
+    list: lane.model.provider.list,
     needles: () => panelNeedles(lifecycle.commandAsync, employee.id, ragflow.stack),
   });
   const provider = await platformRead(PROVIDER_HEALTH);
