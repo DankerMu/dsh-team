@@ -11,7 +11,7 @@
 
 **Change surface:** the `config` and `watch` handlers of the patched `lib/index.js`, through two new entries in `PINS.onlyoffice.replacements`.
 
-- `path = requireAbsolute(rawPath);` occurs in both handlers, so each replacement anchors on text unique to its own route. The nearest is the line before it: `const lang = …` in `config`, the `cwd` line plus the route's own opening in `watch`.
+- The three lines `<anchor>`, `const cwd = sessionCwdOf(…);` and `path = requireAbsolute(rawPath);` occur together in both handlers, so each replacement includes the line before the `cwd` line to stay unique to its own route: `const lang = …` in `config`, and in `watch` the closing `}` of the block before it (only `watch` has a block's closing brace there). Verified at implementation (#764).
 - The replacement value is `path = requireAbsolute(isAbsolute(rawPath) ? rawPath : join(cwd, rawPath));`. `isAbsolute` and `join` are already imported by the released module.
 
 **Must preserve:**
@@ -63,13 +63,14 @@
   - The deterministic provider's scripted assistant reply is exactly a session-relative markdown file link, `[工作通知.docx](工作通知.docx)`, to a DOCX the case wrote into `/data/work`.
   - Clicking the rendered link mounts the editor: the same-origin `/sidebar/onlyoffice/ds/` iframe is visible and 「无法获取编辑器配置」 is absent.
   - The case asserts that the observed `/sidebar/onlyoffice/config` request carried a non-absolute `path`.
-  - Console errors are 0, and the file's bytes and sha256 are unchanged.
+  - Console errors are exactly Document Server 9.4's two ServiceWorker registration refusals, which the gateway refuses by design (`serviceWorkerRefused`, as in the other Office stack cases), and nothing else. The file's bytes and sha256 are unchanged. Corrected at archive: the lane never had zero console errors for an editor mount.
   - If the released DSH renders such a link without routing it to the file viewer, the implementer finds the conversation entry that sends a relative path and reports it as a deviation, never an absolute-path substitute.
 
 **Non-goals:**
 
-- `~` expansion. A `~/` path fails `isWithin` unless the home is inside cwd, as before.
+- `~` expansion. A `~/…` link is not expanded: like any relative path it joins the session cwd as a literal `~` directory, which stays inside cwd and is simply not found. Corrected at archive.
 - Changing better-sidebar.
+- The relative base after an Agent `cd`. The base is the Session's `header.cwd`, as DSH core resolves links; better-sidebar's download fallback may use another working directory. A link written after a `cd` into a subdirectory can resolve to a file that is not there (404); the `isWithin` fence still holds.
 - Upstreaming. A later version of the package replaces the patch.
 - Symlink containment: the lexical `isWithin` fence is kept as released; symlink handling is unchanged and out of scope.
 

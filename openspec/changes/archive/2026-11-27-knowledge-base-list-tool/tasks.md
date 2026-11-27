@@ -32,5 +32,5 @@
 ## 2. Verification
 
 - [x] 2.1 `pnpm lint`, `pnpm typecheck`, `pnpm test` and `pnpm test:integration` exit 0 locally. `pnpm check:fast` fails locally only on untracked `.workplans/`. CI Fast checks and Guardrail self-test are the evidence for those two gates.
-- [ ] 2.2 `pnpm test:stack` with the list case.
-- [ ] 2.3 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
+- [x] 2.2 `pnpm test:stack` with the list case.
+- [x] 2.3 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.

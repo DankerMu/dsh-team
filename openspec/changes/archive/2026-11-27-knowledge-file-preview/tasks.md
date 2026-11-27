@@ -40,6 +40,6 @@
 ## 2. Verification
 
 - [x] 2.1 `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm test:integration` and `pnpm contract:check` exit 0 locally. `pnpm check:fast` and the guardrails' format clean-tree case fail locally only on untracked `.workplans/`; the other 189 guardrail cases pass. CI Fast checks and Guardrail self-test are the evidence for those two gates.
-- [ ] 2.2 `pnpm test:stack` with the preview case.
-- [ ] 2.3 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
-- [ ] 2.4 The PR carries `diff-limit-exempt` with the justification in proposal divergence 5, if it exceeds 400 changed lines.
+- [x] 2.2 `pnpm test:stack` with the preview case. Passed on 120236c (code tree identical to the merged head), 1097.22 s, with the preview, preview-unavailable and past-the-end steps.
+- [x] 2.3 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`. Passed on 019b865: custody 145 tests with cleanup confirmed, deploy 14 tests, clean host fence.
+- [x] 2.4 The PR carries `diff-limit-exempt` with the justification in proposal divergence 5, if it exceeds 400 changed lines.
