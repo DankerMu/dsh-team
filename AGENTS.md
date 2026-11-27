@@ -186,7 +186,7 @@ Max 10 entries, dated, pruned at milestones. Each records a verified development
 - Conventional commits: `<type>(<scope>): <message>`. Types: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `ci`, `build`, `perf`.
 - Scopes: `platform`, `plugins`, `images`, `deploy`, `docs`, `repo`, or a module name.
 - Agent-authored commits end with a `Co-Authored-By:` trailer naming the agent.
-- Enforced by `commitlint` (`commitlint.config.cjs`).
+- Enforced by `commitlint` (`commitlint.config.cjs`): the `commit-msg` hook locally, and `pnpm lint:pr` over the PR range in CI.
 - Use `.github/PULL_REQUEST_TEMPLATE.md`. Required sections: Summary, Test plan, Runtime evidence, Risk.
 - Trunk-based on `main`; feature branches named `<author>/<short-slug>`; one task = one branch.
 - `main` is protected: changes land through a PR on which `All checks passed`, `PR diff size guard`, and `Lockfile-manifest consistency` are green; administrators are not exempt.
@@ -270,7 +270,7 @@ Agents may commit to feature branches, open PRs targeting `main`, run every loca
 - Checkpoint commit at every green state. One task = one branch.
 - Parallel agents use separate git worktrees. Rebase onto `main` before opening or updating a PR.
 - Lockfile conflicts are resolved by re-running `pnpm install`, never by hand.
-- CI failures: classify the failing job (`layer1-fast-checks`, `layer2-unit-tests`, `layer3-integration`, `layer4-anti-drift`, `layer5-secret-scan`, `sast`, `guardrails`, `pr-range`), read the first actionable error, reproduce locally with the same `pnpm` script, fix the root cause, re-run that script.
+- CI failures: classify the failing job by its id in `.github/workflows/ci.yml`, read the first actionable error, reproduce locally with the same `pnpm` script, fix the root cause, re-run that script.
 - A non-obvious lesson costing more than 30 minutes becomes a dated entry in `## Important Development Notes`.
 - The third incident of the same class becomes a lint rule or a hook, with its rejection case added to `scripts/test-guardrails.sh`.
 
