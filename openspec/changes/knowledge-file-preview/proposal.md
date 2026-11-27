@@ -10,7 +10,7 @@
   - The same instance-token authentication, query redaction in request logs, HTTP 200 with a closed `{ result }` body, a single deadline, a body cap, and no retry or redirect, as the existing routes.
   - Upstream: one RAGFlow rc2 `GET /api/v1/datasets/{id}/documents/{documentId}/chunks?page=&page_size=` (read-only, parsed chunks; never the original file).
   - Answer: `{ result: 'ok', total, chunks: [{ content }] }`, where `content` is rc2's `content_with_weight`. rc2 v1.0.0-rc2 (Go, `internal/service/chunk/chunk.go`) sends `content_with_weight` and `chunk_id` per row and no `content` or `document_id`; `http_api_reference.md` § List chunks is stale.
-  - Ownership is checked at document level: `data.doc.id` must be the requested document and `data.doc.dataset_id` the requested library, or the whole answer is `upstream-error`. rc2 filters the rows by `doc_id` itself, and the rows carry no document field to check.
+  - Ownership is checked at document level: `data.doc.id` must be the requested document and `data.doc.dataset_id` the requested library, or the whole answer is `upstream-error`. A page with no rows may carry no `doc` or a null one, and `chunks: null` reads as `[]`, since there is nothing to check (rc2 is a Go service). rc2 filters the rows by `doc_id` itself, and the rows carry no document field to check.
   - Status mapping:
     - An existing document in a library the key cannot access answers HTTP 200 with `code` 403 or 404, which is `invalid-request` through the existing `DOCUMENT_CODES`.
     - A missing document, a document of another library, or a missing library answers HTTP 500, which the shared `classify` reports as `upstream-error`.

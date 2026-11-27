@@ -23,7 +23,7 @@
   - Query: exactly `page` (1..999999) and `page_size` (1..100), parsed strictly like the documents route. Unknown, repeated, malformed or `#`-bearing queries are `invalid-request` before any settings read.
   - Empty address or key is `not-configured` without an outbound request.
   - Upstream `GET /api/v1/datasets/{id}/documents/{documentId}/chunks?page=&page_size=`, with `RAGFLOW_TIMEOUT_MS` and an 8 MiB body cap.
-  - Validation: `code` 0, `data.doc.id === documentId`, `data.doc.dataset_id === id`, `data.total` a non-negative integer, and `data.chunks` an array of at most `page_size` entries, each with a string `content_with_weight`. The answer's `content` is that string.
+  - Validation: `code` 0, `data.doc.id === documentId`, `data.doc.dataset_id === id`, `data.total` a non-negative integer, and `data.chunks` an array of at most `page_size` entries, each with a string `content_with_weight`. The answer's `content` is that string. Exception (fix pass 1, rc2 is a Go service): `data.chunks: null` reads as `[]`, and a page with no rows may carry no `doc` or a null one; a `doc` that is present must still match, and any row requires a matching `doc`.
   - Answer: `{ result: 'ok', total, chunks: [{ content }] }`. A page past the end is `ok` with `[]`.
 - **Host route:** `GET /api/knowledge-base.chunks?datasetId=&documentId=&page=&pageSize=`. Strict parsing as in `knowledge-base.documents`: unknown, repeated, valueless or undecodable items or a fragment are `invalid-request` with no platform request. It answers HTTP 200 with `cache-control: no-store` and a shape-checked body (`{ result, total?, chunks? }`), uses the same request function, deadline and LIST_LIMIT, and logs fixed text only.
 - **Preview view:** see the proposal.
@@ -54,7 +54,7 @@
 - **Proxy unit tests, red first.** Fake-upstream rows use rc2's real shape, `{ chunk_id, content_with_weight, docnm_kwd, … }`, never the stale reference example.
   - ok with 2 rows (`total` 2) returns `chunks: [{ content }]` only.
   - A page past the end is `ok []`.
-  - `doc.id` ≠ `documentId` is `upstream-error`, and so is `doc.dataset_id` ≠ `id`.
+  - `doc.id` ≠ `documentId` is `upstream-error`, and so is `doc.dataset_id` ≠ `id`. An empty page with no `doc` (or `chunks: null`) is `ok` with `[]`.
   - A row without a string `content_with_weight`, or more rows than `page_size`, is `upstream-error`.
   - HTTP 200 with `code` 403 is `invalid-request`, and with `code` 404 too.
   - HTTP 500 with `code` 500 (missing document or library) is `upstream-error`. Another non-zero code with HTTP 200 is `upstream-error`.
@@ -94,7 +94,7 @@
 
 **Review focus:**
 
-- Ownership validation: the document-level `doc.id` and `doc.dataset_id` checks.
+- Ownership validation: the document-level `doc.id` and `doc.dataset_id` checks. Every row needs a matching `doc`; only a page with no rows may come without one.
 - Strict query parsing parity with the documents route.
 - No HTML injection.
 - The secret scan covering the new route.
