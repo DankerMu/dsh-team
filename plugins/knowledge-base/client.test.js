@@ -396,6 +396,14 @@ const documents = (count, offset = 0) =>
     name: `file-${String(index + offset)}.txt`,
   }));
 
+/** One page of `total` files: the count line and no paging row. */
+function expectSinglePage(page, total) {
+  expect(page.fileText()).toContain(`共 ${String(total)} 个文件`);
+  expect(page.fileText()).not.toMatch(/第 \d+ \/ \d+ 页/);
+  expect(page.buttons(page.files(), '上一页')).toEqual([]);
+  expect(page.buttons(page.files(), '下一页')).toEqual([]);
+}
+
 describe('expanded library', () => {
   it('requests its first page of 20 and shows distinct texts for all six displays', async () => {
     const texts = new Map();
@@ -493,7 +501,7 @@ describe('expanded library', () => {
     await page.submit(POLICIES);
     expect(calls[3].url).toBe(documentsUrl(POLICIES, 1, 'expense'));
     await respond(3, { result: 'ok', total: 1, documents: documents(1) });
-    expect(page.fileText()).toContain('第 1 / 1 页');
+    expectSinglePage(page, 1);
   });
 
   it('treats a blank filter as clearing it', async () => {
@@ -660,6 +668,137 @@ describe('late superseded answers', () => {
     // Request A (the unfiltered first page) ignored its abort and answers last.
     await respond(1, { result: 'ok', total: 45, documents: documents(20, 100) });
     expect(page.fileNames()).toEqual(['file-0.txt']);
-    expect(page.fileText()).toContain('第 1 / 1 页');
+    expectSinglePage(page, 1);
+  });
+});
+
+/** The look of the panel; the structure the stack lane and #762 rely on stays. */
+describe('panel presentation', () => {
+  const row = (page, id) =>
+    page.datasets().find((node) => node.props['data-dsh-team-kb-dataset'] === id);
+  const childrenOf = (node, type) => node.children.filter((child) => child.type === type);
+  const FILES_TEXT = {
+    loading: '正在加载文件…',
+    'not-configured': '知识库未配置，无法查看文件',
+    failed: '文件加载失败',
+    empty: '该知识库暂无文件',
+    'no-match': '没有名称匹配的文件',
+  };
+
+  it('renders a collapsed row with the chevron outside the title button and no files', async () => {
+    const page = renderPage();
+    await respond(0, SEEDED);
+    const policies = row(page, POLICIES);
+    expect(childrenOf(policies, 'svg')).toHaveLength(1);
+    const [title, ...others] = childrenOf(policies, 'button');
+    const [chevron, ...glyphs] = childrenOf(policies, 'svg');
+
+    expect(others).toEqual([]);
+    expect(glyphs).toEqual([]);
+    expect(textOf(title)).toBe('Seed-Policies');
+    expect(title.props['aria-expanded']).toBe(false);
+    // The hover rule sets the background, so the button has none inline.
+    expect(title.props.style.background).toBeUndefined();
+    expect(title.findAllByType('svg')).toEqual([]);
+    expect(chevron.props['aria-hidden']).toBe(true);
+    expect(textOf(chevron)).toBe('');
+    expect(textOf(policies)).toBe('Seed-Policies');
+    expect(page.files(POLICIES)).toEqual([]);
+  });
+
+  it('shows the count, titled file rows of exactly their names and no paging for one page', async () => {
+    const page = await expandedPolicies();
+    expect(childrenOf(row(page, CONTRACTS), 'svg')).toHaveLength(1);
+    const collapsed = childrenOf(row(page, CONTRACTS), 'svg')[0].props.style.transform;
+    await respond(1, { result: 'ok', total: 2, documents: documents(2) });
+    const [title] = childrenOf(row(page, POLICIES), 'button');
+    const files = page.files().findAll((node) => node.props['data-dsh-team-kb-file'] !== undefined);
+
+    expect(title.props['aria-expanded']).toBe(true);
+    expect(textOf(title)).toBe('Seed-Policies');
+    expect(childrenOf(row(page, POLICIES), 'svg')[0].props.style.transform).not.toBe(collapsed);
+    expect(files.map((node) => textOf(node))).toEqual(['file-0.txt', 'file-1.txt']);
+    expect(files.map((node) => node.props.title)).toEqual(['file-0.txt', 'file-1.txt']);
+    for (const file of files) expect(file.findByType('svg').props['aria-hidden']).toBe(true);
+    expectSinglePage(page, 2);
+    // The other library stays collapsed.
+    expect(childrenOf(row(page, CONTRACTS), 'button')[0].props['aria-expanded']).toBe(false);
+    expect(
+      page.view.root.findAll((node) => node.props['data-dsh-team-kb-files'] === CONTRACTS),
+    ).toHaveLength(0);
+  });
+
+  it('shows the matching count and no paging for a filtered library', async () => {
+    const page = await expandedPolicies();
+    await respond(1, { result: 'ok', total: 2, documents: documents(2) });
+    await page.type('按文件名筛选', 'expense');
+    await page.submit(POLICIES);
+    await respond(2, {
+      result: 'ok',
+      total: 1,
+      documents: [{ id: FILE, name: 'expense-policy.txt' }],
+    });
+
+    expect(page.fileNames()).toEqual(['expense-policy.txt']);
+    expectSinglePage(page, 1);
+  });
+
+  it('shows the count and the paging row when there is more than one page', async () => {
+    const page = await expandedPolicies();
+    await respond(1, { result: 'ok', total: 41, documents: documents(20) });
+
+    expect(page.fileText()).toContain('共 41 个文件');
+    expect(page.fileText()).toContain('第 1 / 3 页');
+    expect(page.button(page.files(), '上一页').props.disabled).toBe(true);
+    expect(page.button(page.files(), '下一页').props.disabled).toBe(false);
+  });
+
+  it('shows each non-list state with its own text, no count or paging, and retry beside failed', async () => {
+    const page = await expandedPolicies();
+    const expectState = (state) => {
+      expect(page.fileState()).toBe(state);
+      expect(page.fileText()).toContain(FILES_TEXT[state]);
+      expect(page.fileText()).not.toMatch(/共 \d+ 个文件|第 \d+ \/ \d+ 页/);
+    };
+    expectState('loading');
+    await respond(1, { result: 'ok', total: 0, documents: [] });
+    expectState('empty');
+    await page.type('按文件名筛选', 'kb-nothing');
+    await page.submit(POLICIES);
+    await respond(2, { result: 'ok', total: 0, documents: [] });
+    expectState('no-match');
+    await page.submit(POLICIES);
+    await respond(3, { result: 'unavailable' });
+    expectState('failed');
+    const failed = page
+      .files()
+      .find((node) => node.type === 'p' && textOf(node) === FILES_TEXT.failed).parent;
+    expect(failed.props.style.display).toBe('flex');
+    expect(page.buttons(failed, '重试')).toHaveLength(1);
+    await page.submit(POLICIES);
+    await respond(4, { result: 'not-configured' });
+    expectState('not-configured');
+  });
+
+  it('gives the list failure the same notice look with retry beside its text', async () => {
+    const page = renderPage();
+    await respond(0, { result: 'unavailable' });
+    const failed = page
+      .datasets()
+      .find((node) => node.type === 'p' && textOf(node) === '知识库加载失败').parent;
+
+    expect(failed.props.style.display).toBe('flex');
+    expect(page.buttons(failed, '重试')).toHaveLength(1);
+  });
+
+  it('styles row hover through DSH variables outside the list region', async () => {
+    const page = renderPage();
+    await respond(0, SEEDED);
+    const css = page.view.root.findAllByType('style').map((node) => textOf(node));
+
+    expect(css).toHaveLength(1);
+    expect(css[0]).toContain('[data-dsh-team-kb-dataset] > button:hover');
+    expect(css[0]).toContain('var(--dsw-alias-interactive-bg-hover');
+    expect(page.datasets().findAllByType('style')).toEqual([]);
   });
 });
