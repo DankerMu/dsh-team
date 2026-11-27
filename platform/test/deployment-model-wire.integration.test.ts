@@ -689,3 +689,47 @@ it('keeps health byte-identical and ignores the rewrite markers without rewrites
     '{"ready":true,"markedRequests":0,"requests":2,"toolResults":1}',
   );
 });
+
+const LINK = { marker: 'link-7', reply: '[工作通知.docx](工作通知.docx)' };
+const linkTurn = (tools?: unknown[], extra: unknown[] = []) => ({
+  ...userTurn(tools, extra),
+  messages: [{ role: 'user', content: `please ${BASE.marker} ${LINK.marker}` }, ...extra],
+});
+const linkChunk = (content: string) => [
+  chunk({ index: 0, delta: { role: 'assistant', content }, finish_reason: null }),
+  chunk({ index: 0, delta: {}, finish_reason: 'stop' }),
+];
+
+it.each([true, false])(
+  'replies with the link text once, to the first marked write-capable turn (streamed %s)',
+  async (stream) => {
+    const origin = await start({ ...BASE, script: SCRIPT, link: LINK });
+    for (const body of [linkTurn(), linkTurn([READ_TOOL]), linkTurn([WRITE_TOOL], toolResult)])
+      expect(await streamed(await complete(origin, body))).toEqual(replyChunks);
+    const first = await complete(origin, { ...linkTurn([WRITE_TOOL]), stream });
+    if (stream) expect(await streamed(first)).toEqual(linkChunk(LINK.reply));
+    else
+      expect(await first.json()).toMatchObject({
+        choices: [{ message: { role: 'assistant', content: LINK.reply }, finish_reason: 'stop' }],
+      });
+    expect(await streamed(await complete(origin, linkTurn([WRITE_TOOL])))).toEqual(
+      callChunks(writeCall),
+    );
+    expect(await health(origin)).toEqual({
+      ...{ ready: true, markedRequests: 5, requests: 5, toolResults: 1, links: 1 },
+    });
+  },
+);
+
+it.each([
+  ['a non-object link', 'link'],
+  ['a link missing its reply', { marker: LINK.marker }],
+  ['a link with an extra key', { ...LINK, mode: 'text' }],
+  ['a link with an empty marker', { ...LINK, marker: '' }],
+  ['a link with an empty reply', { ...LINK, reply: '' }],
+])('rejects %s before listening', async (_name, link) => {
+  const { closed } = await launch({ ...BASE, link }, await unusedPort());
+  const { code, stderr } = await closed;
+  expect(code).not.toBe(0);
+  expect(stderr).toContain('Invalid owned model configuration');
+});

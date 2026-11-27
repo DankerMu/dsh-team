@@ -6,6 +6,7 @@ import {
   FILE_TOKEN_PUBLIC,
   KEY_JS,
   MINT_JS,
+  pathProbeScript,
   READ_JS,
 } from './onlyoffice-probe-script.ts';
 import { record } from './docker-cleanup.ts';
@@ -21,7 +22,7 @@ const FATAL_MARKERS = ['fatal load failure', 'fatal uncaught exception'];
 // A pending plugin (e.g. an injected host service DSH no longer provides) never registers routes.
 const ACTIVATION_MARKERS = ['did not activate', 'waiting for service'];
 
-type Phase = 'absent' | 'present';
+type Phase = 'absent' | 'present' | 'paths';
 
 /**
  * Runs inside the instance as uid1001. DSH binds only the overlay's address, so requests go there
@@ -29,6 +30,7 @@ type Phase = 'absent' | 'present';
  * from the container environment, never from this text; only its SHA-256 prefix leaves.
  */
 function probeScript(address: string, phase: Phase): string {
+  if (phase === 'paths') return pathProbeScript(address);
   return `
 import { createHash, createHmac } from 'node:crypto';
 import { createServer, request } from 'node:http';
@@ -106,8 +108,27 @@ const MISSING_TOKEN = { status: 400, body: 'missing token' };
 const REJECTED_TOKEN = { status: 403, body: 'invalid token: bad-signature' };
 const UNREGISTERED = { status: 200, body: { error: 1 }, downloads: 0, file: 'unchanged' };
 
+const SERVED = { status: 200, key: true, claim: true, registered: true };
+const STREAM = { status: 200, type: 'text/event-stream; charset=utf-8', opened: true };
+/** #760: both forms of one path resolve to one file; the released refusals stay. */
+const REFUSALS = {
+  escaping: { status: 403, message: 'path outside the session working directory' },
+  outside: { status: 403, message: 'path outside the session working directory' },
+  empty: { status: 400, message: 'unsupported extension ""' },
+  missing: { status: 400, message: 'sessionId and path are required' },
+};
+const PATHS = {
+  config: { relative: SERVED, absolute: SERVED, ...REFUSALS },
+  watch: {
+    relative: { ...STREAM, changes: [true] },
+    absolute: { ...STREAM, changes: [true] },
+    ...REFUSALS,
+  },
+};
+
 /** The governing invariant per start: only this start's secret mints, verifies and registers. */
 function expectedObservation(phase: Phase, secretPrefix: string | null): Record<string, unknown> {
+  if (phase === 'paths') return PATHS;
   const common = {
     phase,
     secret: secretPrefix,
@@ -194,7 +215,7 @@ function webContainer(
     overlay,
     seccomp: lifecycle.seccomp,
     network,
-    ...(phase === 'present' ? { env: { [SECRET_ENV]: secret } } : {}),
+    ...(phase === 'absent' ? {} : { env: { [SECRET_ENV]: secret } }),
   };
 }
 
@@ -275,4 +296,25 @@ export async function runOnlyofficeTokenScenario(lifecycle: UserImageLifecycle):
   const present = webContainer(lifecycle, 'present', overlay, network, secret);
   const withSecret = await probeStart(lifecycle, present, 'present', secret);
   return JSON.stringify({ absent: withoutSecret, present: withSecret });
+}
+
+/**
+ * #760: with the per-start secret and an ONLYOFFICE row (an unreachable Document Server suffices
+ * for `config`), session-relative and absolute paths name one file on `config` and `watch`; paths
+ * outside the session directory, `..` included, and empty or missing paths are still refused.
+ */
+export async function runOnlyofficePathScenario(lifecycle: UserImageLifecycle): Promise<string> {
+  const secret = randomBytes(32).toString('hex');
+  const network = lifecycleWebNetwork(lifecycle, 'onlyoffice-paths');
+  const address = webAddress(network);
+  const office = `documentServerUrl: http://127.0.0.1:9\n    jwtSecret: ${randomBytes(16).toString('hex')}`;
+  const overlay = await writeManagedConfig(
+    lifecycle.overlayDirectory,
+    'onlyofficepa',
+    `- id: webserver\n  config:\n    host: ${address}\n    port: 3080\n` +
+      `- id: dsh-sidebar-onlyoffice\n  config:\n    ${office}\n` +
+      `    internalBaseUrl: http://${address}:3080\n    publicBaseUrl: http://127.0.0.1:3080\n`,
+  );
+  const paths = webContainer(lifecycle, 'paths', overlay, network, secret);
+  return JSON.stringify(await probeStart(lifecycle, paths, 'paths', secret));
 }

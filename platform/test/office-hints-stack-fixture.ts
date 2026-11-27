@@ -154,9 +154,16 @@ export const untilSeen = (
 
 type Shoot = (name: string) => Promise<void>;
 
+/** The landing session's file-area row of `name`, once the Sidebar shows it. */
+const fileAreaRow = (timeout: number, name: string) => async (page: Page) => {
+  await until(() => showSidebarRows(page, [name]), timeout, `office hints ${name} row`);
+  return element(page, rowQuery(name));
+};
+
 /**
- * Opens the file from the landing session's file area, waits for the hinted editor and then for
- * the ServiceWorker refusal, which ONLYOFFICE logs after its `ready` phase, and checks the page.
+ * Opens the file through `target` (by default its file-area row), waits for the hinted editor and
+ * then for the ServiceWorker refusal, which ONLYOFFICE logs after its `ready` phase, and checks the
+ * page.
  */
 export async function openHinted(
   page: Page,
@@ -165,9 +172,9 @@ export async function openHinted(
   name: string,
   screenshot: string,
   refusal = serviceWorkerRefused,
+  target = fileAreaRow(timeout, name),
 ) {
-  await until(() => showSidebarRows(page, [name]), timeout, `office hints ${name} row`);
-  const row = await element(page, rowQuery(name));
+  const row = await target(page);
   if (row === null) throw new Error(`Office hints ${name} row missing`);
   // What workbenchSession records as a console error; an allowed unload report is not one.
   const errors: string[] = [];

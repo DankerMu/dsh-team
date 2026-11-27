@@ -34,6 +34,12 @@ const fence = (route, opening, service) =>
   `\t\t\tpath: "/sidebar/onlyoffice/${route}",\n\t\t\thandler: async (req, res) => {\n${opening}` +
   `\t\t\t\ttry {\n\t\t\t\t\tif (!isTrustedApiRequest(req, plugin.${service}.trustedHosts)) {`;
 const WATCH_OPENING = '\t\t\t\tlet streaming = false;\n';
+/** The route's path resolution, anchored by its line before the cwd (the lines themselves repeat). */
+const resolution = (before, value) =>
+  `${before}\n\t\t\t\t\tconst cwd = sessionCwdOf(plugin, sessionId, url.searchParams.get("cwd"));\n` +
+  `\t\t\t\t\tlet path;\n\t\t\t\t\ttry {\n\t\t\t\t\t\tpath = requireAbsolute(${value});`;
+const SESSION_PATH = 'isAbsolute(rawPath) ? rawPath : join(cwd, rawPath)';
+const CONFIG_LANG = 'const lang = editorLang(url.searchParams.get("lang") ?? void 0);';
 
 /** Pinned values per package; each replacement's original text must occur exactly once. */
 export const PINS = {
@@ -42,6 +48,8 @@ export const PINS = {
   // is minted, verified, registered or derived, and the watch hub treats the file as absent.
   // DSH 0.2.1-rc.2 provides webStartup (with trustedHosts) instead of webRuntime, so the injected
   // service and its three trustedHosts reads are remapped; comments naming webRuntime stay.
+  // The config and watch routes resolve a session-relative path under the session cwd, as
+  // better-sidebar's file routes do; the released isWithin fence then applies unchanged (#760).
   // lib/client.js, with its own list: an editor turning clean after a file change arrived while it
   // was dirty refreshes once to the file instead of only clearing the stale banner; a failed
   // refresh keeps the change pending, so the next clean transition retries.
@@ -54,7 +62,7 @@ export const PINS = {
       {
         target: 'lib/index.js',
         inputSha256: 'e2148f01c2740c464eb39eaf6b9547f773a7b1a172039e9554e03da617d4b29b',
-        outputSha256: '30c3ffd21bda284e9daa205bd3f71ec08eeb61dfad999080608a9a81d49196ef',
+        outputSha256: '59caeb56a38e52e35a649cec6702d41d801a49aa43ab167951f84e776d6c2a78',
       },
       {
         target: 'lib/client.js',
@@ -105,6 +113,9 @@ export const PINS = {
       ['const runtime = () => ctx.webRuntime;', 'const runtime = () => ctx.webStartup;'],
       [fence('config', '', 'webRuntime'), fence('config', '', 'webStartup')],
       [fence('watch', WATCH_OPENING, 'webRuntime'), fence('watch', WATCH_OPENING, 'webStartup')],
+      [resolution(CONFIG_LANG, 'rawPath'), resolution(CONFIG_LANG, SESSION_PATH)],
+      // Only watch has a block's closing brace before its cwd line.
+      [resolution('}', 'rawPath'), resolution('}', SESSION_PATH)],
     ],
   },
   // dsh-better-sidebar@0.28.0: the file editor's canOpen also takes docx, xlsx and pptx while the

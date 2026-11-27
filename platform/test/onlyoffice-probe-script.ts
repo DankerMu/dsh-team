@@ -44,3 +44,71 @@ const json = (response) => {
   try { return { status: response.status, body: JSON.parse(response.body.toString('utf8')) }; }
   catch { return text(response); }
 };`;
+
+/**
+ * #760 as uid1001 inside a running user image: `config` and `watch` with session-relative,
+ * escaping, absolute, empty and missing paths under a fresh `/data/work` directory, removed after.
+ * DSH answers at `address`, else at the container's own hostname address. Prints only statuses,
+ * messages and whether each key and token-claim path equals the one derived from the absolute path.
+ */
+export const pathProbeScript = (address?: string): string => `
+import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { request } from 'node:http';
+import { hostname } from 'node:os';
+const secret = process.env.DSH_TEAM_ONLYOFFICE_FILE_SECRET;
+const host = ${address === undefined ? '(await lookup(hostname(), 4)).address' : JSON.stringify(address)};
+const dir = '/data/work/dsh-team-path-probe-' + randomBytes(6).toString('hex');
+const file = dir + '/报告.docx';
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const get = (route, path, hold = 0) => new Promise((resolve, reject) => {
+  const query = 'sessionId=t&cwd=' + encodeURIComponent(dir) + (path === undefined ? '' : '&path=' + encodeURIComponent(path));
+  const req = request({ host, port: 3080, path: '/sidebar/onlyoffice/' + route + '?' + query, headers: { host: '127.0.0.1:3080' } }, (res) => {
+    let body = '';
+    res.setEncoding('utf8').on('data', (chunk) => { body += chunk; });
+    const done = () => resolve({ status: res.statusCode, type: res.headers['content-type'], body });
+    if (hold === 0) res.on('end', done);
+    else setTimeout(() => { done(); req.destroy(); }, hold);
+  });
+  req.on('error', reject).end();
+});
+const keyNow = () => { const info = statSync(file); ${KEY_JS} return k1; };
+const refused = ({ status, body }) => { try { return { status, message: JSON.parse(body).error.message }; } catch { return { status, body: body.slice(0, 80) }; } };
+const registered = async (key) => {
+  for (const deadline = Date.now() + 3000; Date.now() < deadline; await pause(100))
+    try { if (JSON.parse(readFileSync('/data/home/plugins/dsh-sidebar-onlyoffice/registry.json', 'utf8')).entries.some((entry) => entry.key === key)) return true; } catch {}
+  return false;
+};
+const config = async (path) => {
+  const response = await get('config', path);
+  if (response.status !== 200) return refused(response);
+  const { document } = JSON.parse(response.body).config;
+  const token = new URL(document.url).searchParams.get('token').split('.')[0];
+  const claim = JSON.parse(Buffer.from(token, 'base64url').toString('utf8')).path;
+  return { status: 200, key: document.key === keyNow(), claim: claim === file, registered: await registered(document.key) };
+};
+const stream = (response, key) => response.status !== 200 ? refused(response) : {
+  status: 200, type: response.type, opened: response.body.startsWith('retry: 3000\\n\\n:ok\\n\\n'),
+  changes: response.body.split('data: ').slice(1).map((event) => JSON.parse(event).key === key),
+};
+const refusals = (route) => [['escaping', '../x.docx'], ['outside', '/data/work/outside.docx'], ['empty', ''], ['missing', undefined]]
+  .map(async ([name, path]) => [name, refused(await get(route, path))]);
+const observed = {};
+try {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(file, 'dsh-team relative path probe');
+  observed.config = Object.fromEntries([['relative', await config('报告.docx')], ['absolute', await config(file)], ...(await Promise.all(refusals('config')))]);
+  const held = [get('watch', '报告.docx', 3000), get('watch', file, 3000)];
+  await pause(1000);
+  writeFileSync(file, 'dsh-team relative path probe, changed');
+  const [relative, absolute] = await Promise.all(held);
+  const key = keyNow();
+  observed.watch = Object.fromEntries([['relative', stream(relative, key)], ['absolute', stream(absolute, key)], ...(await Promise.all(refusals('watch')))]);
+} catch (error) {
+  observed.error = error instanceof Error ? error.message : String(error);
+} finally {
+  rmSync(dir, { recursive: true, force: true });
+}
+process.stdout.write(JSON.stringify(observed));
+`;
