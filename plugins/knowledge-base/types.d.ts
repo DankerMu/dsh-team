@@ -17,7 +17,7 @@ export interface SearchChunk {
   readonly positions?: readonly (readonly number[])[];
 }
 
-/** The closed set both browser routes answer with HTTP 200, plus the retrieval answer. */
+/** The closed set the three browser routes answer with HTTP 200, plus the retrieval answer. */
 export type KnowledgeBaseAnswer =
   | { readonly result: 'ok'; readonly datasets: readonly KnowledgeBaseEntry[] }
   | {
@@ -27,13 +27,19 @@ export type KnowledgeBaseAnswer =
     }
   | {
       readonly result: 'ok';
+      readonly total: number;
+      /** One page of a document's parsed text, read-only, in RAGFlow order. */
+      readonly chunks: readonly { readonly content: string }[];
+    }
+  | {
+      readonly result: 'ok';
       readonly excluded: readonly string[];
       readonly chunks: readonly SearchChunk[];
     }
   | { readonly result: 'no-results'; readonly excluded: readonly string[] }
   | { readonly result: ProxyFailure };
 
-/** The proxy's closed failure results, shared by both routes and the retrieval. */
+/** The proxy's closed failure results, shared by the three routes and the retrieval. */
 export type ProxyFailure =
   'not-configured' | 'unavailable' | 'timeout' | 'upstream-error' | 'invalid-request';
 
@@ -45,7 +51,7 @@ interface KnowledgeBaseLogger {
 export interface PlatformRequest {
   readonly url: string;
   readonly token: string;
-  readonly kind: 'datasets' | 'documents' | 'retrieval';
+  readonly kind: 'datasets' | 'documents' | 'chunks' | 'retrieval';
   readonly limit: number;
   readonly signal: AbortSignal;
   readonly logger: KnowledgeBaseLogger;

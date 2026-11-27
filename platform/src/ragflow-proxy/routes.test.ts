@@ -9,6 +9,9 @@ const DATASET = 'd'.repeat(32);
 const DOCUMENTS = `${DATASETS}/${DATASET}/documents`;
 const PAGE = `${DOCUMENTS}?page=1&page_size=10`;
 const RETRIEVAL = '/_platform/instance-api/ragflow/retrieval';
+const DOCUMENT = 'e'.repeat(32);
+const CHUNKS = `${DOCUMENTS}/${DOCUMENT}/chunks`;
+const CHUNK_PAGE = `${CHUNKS}?page=1&page_size=20`;
 /** One retrieval POST with `payload` sent verbatim and the given headers beside the token. */
 type Post = (
   payload: string | undefined,
@@ -57,7 +60,7 @@ async function withProxyRoutes(
   );
 }
 
-it.each([VERSION, DATASETS, PAGE])(
+it.each([VERSION, DATASETS, PAGE, CHUNK_PAGE])(
   'answers %s with not-configured and HTTP 200 while RAGFlow has no saved address',
   async (url) => {
     await withProxyRoutes(async (send) => {
@@ -68,7 +71,7 @@ it.each([VERSION, DATASETS, PAGE])(
   },
 );
 
-it.each([VERSION, DATASETS, PAGE])(
+it.each([VERSION, DATASETS, PAGE, CHUNK_PAGE])(
   'declares no implicit HEAD route for %s, so HEAD gets the platform 404',
   async (url) => {
     await withProxyRoutes(async (send) => {
@@ -101,6 +104,7 @@ it.each([
   [VERSION, 'RAGFlow proxy version failure'],
   [DATASETS, 'RAGFlow proxy datasets failure'],
   [PAGE, 'RAGFlow proxy documents failure'],
+  [CHUNK_PAGE, 'RAGFlow proxy chunks failure'],
 ])('answers a settings storage failure on %s with the fixed 500 and log text', async (url, log) => {
   await withProxyRoutes(async (send, database, lines) => {
     database.exec('DROP TABLE settings');
@@ -202,6 +206,120 @@ it.each([
       // Nothing is saved, so an admitted request stops at the settings it would read.
       expect([status, JSON.parse(body)]).toEqual([200, { result: 'not-configured' }]);
     });
+  },
+);
+
+it.each([
+  ['a 31-character dataset ID', `${DATASETS}/${'d'.repeat(31)}/documents/${DOCUMENT}/chunks`],
+  ['an uppercase dataset ID', `${DATASETS}/${'D'.repeat(32)}/documents/${DOCUMENT}/chunks`],
+  ['a 31-character document ID', `${DOCUMENTS}/${'e'.repeat(31)}/chunks`],
+  ['a 33-character document ID', `${DOCUMENTS}/${'e'.repeat(33)}/chunks`],
+  ['an uppercase document ID', `${DOCUMENTS}/${'E'.repeat(32)}/chunks`],
+  [
+    'an encoded slash in the document ID',
+    `${DOCUMENTS}/${'e'.repeat(16)}%2F${'e'.repeat(15)}/chunks`,
+  ],
+])(
+  'answers a chunk request with %s as invalid-request before reading settings',
+  async (_label, path) => {
+    await withProxyRoutes(async (send, database) => {
+      database.exec('DROP TABLE settings');
+
+      const [status, body] = await send('GET', `${path}?page=1&page_size=20`);
+
+      expect([status, JSON.parse(body)]).toEqual([200, { result: 'invalid-request' }]);
+    });
+  },
+);
+
+it.each([
+  ['no query', ''],
+  ['a missing page', '?page_size=20'],
+  ['a missing page size', '?page=1'],
+  ['page 0', '?page=0&page_size=20'],
+  ['page 1000000', '?page=1000000&page_size=20'],
+  ['a zero-padded page', '?page=01&page_size=20'],
+  ['page size 0', '?page=1&page_size=0'],
+  ['page size 101', '?page=1&page_size=101'],
+  ['keywords, which the preview does not take', '?page=1&page_size=20&keywords=a'],
+  ['available, which the preview does not take', '?page=1&page_size=20&available=1'],
+  ['an unknown key', '?page=1&page_size=20&x=1'],
+  ['a repeated page', '?page=1&page=2&page_size=20'],
+  ['an item without "="', '?page&page=1&page_size=20'],
+  ['an empty item', '?page=1&&page_size=20'],
+  ['an invalid escape in a name', '?page=1&page_size=20&%zz=1'],
+])(
+  'answers a chunk request with %s as invalid-request before reading settings',
+  async (_label, query) => {
+    await withProxyRoutes(async (send, database) => {
+      database.exec('DROP TABLE settings');
+
+      const [status, body] = await send('GET', `${CHUNKS}${query}`);
+
+      expect([status, JSON.parse(body)]).toEqual([200, { result: 'invalid-request' }]);
+    });
+  },
+);
+
+it.each([
+  ['page 1 and page size 1', '?page=1&page_size=1'],
+  ['page 999999 and page size 100', '?page=999999&page_size=100'],
+  ['keys in another order', '?page_size=20&page=2'],
+])(
+  'admits a chunk request with %s past validation to the saved settings',
+  async (_label, query) => {
+    await withProxyRoutes(async (send) => {
+      const [status, body] = await send('GET', `${CHUNKS}${query}`);
+
+      expect([status, JSON.parse(body)]).toEqual([200, { result: 'not-configured' }]);
+    });
+  },
+);
+
+it('answers a chunk request with another instance token with the fixed 401', async () => {
+  await withApp(
+    async (app, database) => {
+      seedInstance(database, { userId: 'owner', token: instanceToken(), host: '127.0.0.1' });
+      const response = await app.inject({
+        method: 'GET',
+        url: CHUNK_PAGE,
+        remoteAddress: '127.0.0.1',
+        headers: { authorization: `Bearer ${instanceToken()}` },
+      });
+
+      expect([response.statusCode, JSON.parse(response.body)]).toEqual([
+        401,
+        { statusCode: 401, error: 'Unauthorized', message: 'Unauthorized' },
+      ]);
+    },
+    false,
+    [],
+    undefined,
+    { upstreamMode: 'network' },
+  );
+});
+
+it.each(['POST', 'PUT', 'DELETE'] as const)(
+  "declares no %s route for a document's chunks",
+  async (method) => {
+    await withApp(
+      async (app, database) => {
+        const token = instanceToken();
+        seedInstance(database, { userId: 'owner', token, host: '127.0.0.1' });
+        const response = await app.inject({
+          method,
+          url: CHUNK_PAGE,
+          remoteAddress: '127.0.0.1',
+          headers: { authorization: `Bearer ${token}` },
+        });
+
+        expect(response.statusCode).toBe(404);
+      },
+      false,
+      [],
+      undefined,
+      { upstreamMode: 'network' },
+    );
   },
 );
 

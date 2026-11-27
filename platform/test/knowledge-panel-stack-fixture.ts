@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Page, Response } from '@playwright/test';
+import type { Page, Response, Route } from '@playwright/test';
 import { expect } from 'vitest';
 import { SEED_DATASETS } from '../../scripts/seed-stack.mjs';
 import type { AsyncDockerCommand } from './docker-command.ts';
@@ -16,6 +16,10 @@ const ENTRY = 'button[aria-label="知识库"]';
 const STATES = ['loading', 'not-configured', 'failed', 'empty', 'no-match', 'list'] as const;
 type PanelState = (typeof STATES)[number];
 const POLICIES = 'dsh-team-seed-policies';
+const EXPENSE = 'expense-policy.txt';
+const CHUNKS_ROUTE = '/api/knowledge-base.chunks';
+// One line of `scripts/seed-stack/dsh-team-seed-policies/expense-policy.txt`, which seed:stack uploads.
+const EXPENSE_PHRASE = '琥珀报销台';
 
 /** What the panel shows, read in the page; the root config has no DOM lib. */
 export interface PanelSnapshot {
@@ -25,12 +29,15 @@ export interface PanelSnapshot {
   readonly buttons: readonly string[];
   readonly datasets: { state: PanelState; text: string; names: readonly string[] } | null;
   readonly files: readonly { state: PanelState; names: readonly string[]; hint: boolean }[];
+  /** The open file preview: its state, file name and chunk texts; absent while none is open. */
+  readonly preview?: { state: PanelState; name: string; chunks: readonly string[] };
 }
 
 const SNAPSHOT = `(() => {
   const text = (node) => (node.textContent || '').trim();
   const page = document.querySelector('[data-dsh-team-kb-page]');
   const list = document.querySelector('[data-dsh-team-kb-datasets]');
+  const preview = document.querySelector('[data-dsh-team-kb-preview]');
   return {
     loading: document.querySelectorAll('[data-dsh-team-kb-state="loading"]').length,
     buttons: page === null ? [] : [...page.querySelectorAll('button')].map(text),
@@ -44,6 +51,11 @@ const SNAPSHOT = `(() => {
       names: [...region.querySelectorAll('[data-dsh-team-kb-file]')].map(text),
       hint: region.querySelector('[data-dsh-team-kb-hint]') !== null,
     })),
+    ...(preview === null ? {} : { preview: {
+      state: preview.getAttribute('data-dsh-team-kb-state'),
+      name: text(preview.querySelector('h3') || preview),
+      chunks: [...preview.querySelectorAll('[data-dsh-team-kb-chunk]')].map(text),
+    } }),
   };
 })()`;
 
@@ -77,7 +89,19 @@ export function panelSnapshot(value: unknown): PanelSnapshot {
     if (typeof files.hint !== 'boolean') throw new Error(MALFORMED);
     return { state: files.state, names: texts(files.names), hint: files.hint };
   });
-  return { loading: Number(value.loading), buttons: texts(value.buttons), datasets, files };
+  const snapshot = {
+    loading: Number(value.loading),
+    buttons: texts(value.buttons),
+    datasets,
+    files,
+  };
+  if (!('preview' in value)) return snapshot;
+  const preview = region(value.preview);
+  if (typeof preview.name !== 'string') throw new Error(MALFORMED);
+  return {
+    ...snapshot,
+    preview: { state: preview.state, name: preview.name, chunks: texts(preview.chunks) },
+  };
 }
 
 /**
@@ -111,11 +135,12 @@ export interface PanelStep {
   readonly screenshot: string;
 }
 
+/** An open preview's state stands for the step; the hidden list beneath it still counts. */
 export function panelStep(step: string, snapshot: PanelSnapshot, screenshot: string): PanelStep {
   if (snapshot.datasets === null) throw new Error('Knowledge panel not open');
   return {
     step,
-    state: snapshot.datasets.state,
+    state: snapshot.preview?.state ?? snapshot.datasets.state,
     datasets: snapshot.datasets.names.length,
     files: snapshot.files.reduce((count, { names }) => count + names.length, 0),
     screenshot: `${screenshot}.png`,
@@ -126,8 +151,17 @@ export function panelStep(step: string, snapshot: PanelSnapshot, screenshot: str
 interface PanelDriver {
   open(): Promise<PanelSnapshot>;
   /** Clicks a panel button and waits for its route answer, then for the panel to settle. */
-  answered(route: 'datasets' | 'documents', click: () => Promise<void>): Promise<PanelSnapshot>;
+  answered(
+    route: 'datasets' | 'documents' | 'chunks',
+    click: () => Promise<void>,
+  ): Promise<PanelSnapshot>;
+  /** Clicks a panel button that sends no request, then waits for the panel to settle. */
+  clicked(click: () => Promise<void>): Promise<PanelSnapshot>;
   button(name: string): () => Promise<void>;
+  /** The file row of an expanded library, by its exact name. */
+  file(name: string): () => Promise<void>;
+  /** Runs `body` while every chunks route answer is a stubbed `unavailable`. */
+  unavailableChunks(body: () => Promise<void>): Promise<void>;
   filter(text: string): () => Promise<void>;
   search(text: string): Promise<PanelSnapshot>;
   record(step: string, snapshot: PanelSnapshot, screenshot: string): Promise<void>;
@@ -181,7 +215,11 @@ export async function panelNeedles(
 /** What a session's resource scan reads of one Playwright response. */
 export type ScannedResponse = Pick<Response, 'url' | 'status' | 'headers' | 'body'>;
 type ScannedKind = 'html' | 'script' | 'panel-route';
-const PANEL_ROUTES = new Set(['/api/knowledge-base.datasets', '/api/knowledge-base.documents']);
+const PANEL_ROUTES = new Set([
+  '/api/knowledge-base.datasets',
+  '/api/knowledge-base.documents',
+  CHUNKS_ROUTE,
+]);
 
 /**
  * Same-origin bodies a panel session scans: every panel route answer, and 200 DSH documents and
@@ -289,8 +327,31 @@ export function panelDriver(page: Page, shoot: (name: string) => Promise<void>, 
       await Promise.all([page.waitForResponse(routeAnswer(route), { timeout }), click()]);
       return settle();
     },
+    async clicked(click) {
+      await click();
+      return settle();
+    },
     button: (name) => () =>
       page.locator('[data-dsh-team-kb-page]').getByRole('button', { name, exact: true }).click(),
+    file: (name) => () =>
+      page.locator('[data-dsh-team-kb-files]').getByRole('button', { name, exact: true }).click(),
+    async unavailableChunks(body) {
+      // Only the chunks route: RAGFlow keeps running, and the list stays usable to open a file.
+      const matcher = (url: URL) => url.pathname === CHUNKS_ROUTE;
+      const handler = (route: Route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          headers: { 'cache-control': 'no-store' },
+          body: '{"result":"unavailable"}',
+        });
+      await page.route(matcher, handler);
+      try {
+        await body();
+      } finally {
+        await page.unroute(matcher, handler);
+      }
+    },
     filter: (text) => async () => {
       const field = page.locator('[data-dsh-team-kb-files] input[aria-label="按文件名筛选"]');
       await field.fill(text);
@@ -359,7 +420,32 @@ export function unavailablePanel(session: StackSession, needles: PanelNeedles) {
   });
 }
 
-/** After RAGFlow is back: seed libraries, one library's files, a file filter and a no-match search. */
+/**
+ * The filtered `expense-policy.txt` opens into its parsed seed text and 「返回列表」 restores the
+ * filtered list; then, with only the chunks route stubbed `unavailable`, the preview fails with
+ * 「重试」 and closes again.
+ */
+async function previewSteps(panel: PanelDriver): Promise<void> {
+  const previewed = await panel.answered('chunks', panel.file(EXPENSE));
+  expect(previewed.preview).toMatchObject({ state: 'list', name: EXPENSE });
+  expect(previewed.preview?.chunks.join('\n')).toContain(EXPENSE_PHRASE);
+  await panel.record('preview', previewed, 'kb-preview');
+  const returned = await panel.clicked(panel.button('返回列表'));
+  expect(returned.preview).toBeUndefined();
+  expect(returned.files).toEqual([{ state: 'list', names: [EXPENSE], hint: false }]);
+  await panel.unavailableChunks(async () => {
+    const failed = await panel.answered('chunks', panel.file(EXPENSE));
+    expect(failed.preview).toMatchObject({ state: 'failed', name: EXPENSE, chunks: [] });
+    expect(failed.buttons).toContain('重试');
+    await panel.record('preview-unavailable', failed, 'kb-preview-unavailable');
+    expect((await panel.clicked(panel.button('返回列表'))).preview).toBeUndefined();
+  });
+}
+
+/**
+ * After RAGFlow is back: seed libraries, one library's files, a file filter, the file preview
+ * and its stubbed outage, and a no-match search.
+ */
 export function restoredPanel(session: StackSession, needles: PanelNeedles) {
   return panelSession(session, 'restored', needles, async (panel) => {
     await panel.open();
@@ -377,8 +463,45 @@ export function restoredPanel(session: StackSession, needles: PanelNeedles) {
     const filtered = await panel.answered('documents', panel.filter('expense'));
     expect(filtered.files).toEqual([{ state: 'list', names: ['expense-policy.txt'], hint: false }]);
     await panel.record('filter', filtered, 'kb-filter');
+    await previewSteps(panel);
     const searched = await panel.search(`kb-no-match-${randomUUID()}`);
     expect(searched.datasets).toMatchObject({ state: 'no-match', names: [] });
     await panel.record('no-match', searched, 'kb-no-match');
   });
+}
+
+const NO_ERRORS = { consoleErrors: [], pageErrors: [], failedRequests: [], externalRequests: [] };
+
+/**
+ * The three panel sessions' evidence in stack order: each without a console, page, failed or
+ * external request, their steps with states, file counts and screenshots as the lane takes them.
+ * Returns the steps and screenshots for the lane's evidence line.
+ */
+export function expectPanelEvidence(sessions: readonly PanelSessionEvidence[]): {
+  steps: readonly PanelStep[];
+  screenshots: readonly string[];
+} {
+  for (const { browser } of sessions)
+    expect({
+      consoleErrors: browser.consoleErrors,
+      pageErrors: browser.pageErrors,
+      failedRequests: browser.failedRequests,
+      externalRequests: browser.externalRequests,
+    }).toEqual(NO_ERRORS);
+  const steps = sessions.flatMap((session) => session.steps);
+  expect(steps.map(({ step, state, screenshot }) => [step, state, screenshot])).toEqual([
+    ['not-configured', 'not-configured', 'kb-not-configured.png'],
+    ['unavailable', 'failed', 'kb-unavailable.png'],
+    ['datasets', 'list', 'kb-datasets.png'],
+    ['files', 'list', 'kb-files.png'],
+    ['filter', 'list', 'kb-filter.png'],
+    ['preview', 'list', 'kb-preview.png'],
+    ['preview-unavailable', 'failed', 'kb-preview-unavailable.png'],
+    ['no-match', 'no-match', 'kb-no-match.png'],
+  ]);
+  // The preview hides the filtered list without unmounting it, so its one file still counts.
+  expect(steps.map(({ files }) => files)).toEqual([0, 0, 0, 2, 1, 1, 1, 0]);
+  const screenshots = sessions.flatMap(({ browser }) => browser.screenshots);
+  expect(screenshots).toEqual(steps.map(({ screenshot }) => screenshot));
+  return { steps, screenshots };
 }

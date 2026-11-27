@@ -7,7 +7,8 @@ const BODY_LIMIT = 65_536;
 /**
  * The complete dataset list. Every rc2 row repeats the dataset's and its owner's base64 avatars,
  * so large avatars can exceed this; the list then fails as upstream-error rather than truncating.
- * A document page and a retrieval answer, whose chunks carry rc2's token fields, share it.
+ * A document page, a chunk page and a retrieval answer, whose chunks carry rc2's token fields,
+ * share it.
  */
 const RAGFLOW_LIST_BODY_LIMIT = 8 * 1024 * 1024;
 // One unpaged read: paging while a dataset is deleted could skip one that still exists.
@@ -70,6 +71,18 @@ type RagflowDocumentsOutcome =
       /** Documents matching the filter across all pages, as RAGFlow counts them. */
       readonly total: number;
       readonly documents: readonly RagflowEntry[];
+    }
+  | { readonly result: RagflowFailure };
+/** One parsed chunk of a document: only its text leaves the module. */
+interface RagflowDocumentChunk {
+  readonly content: string;
+}
+type RagflowChunksOutcome =
+  | {
+      readonly result: 'ok';
+      /** The document's chunks across all pages, as RAGFlow counts them. */
+      readonly total: number;
+      readonly chunks: readonly RagflowDocumentChunk[];
     }
   | { readonly result: RagflowFailure };
 interface RagflowConnection {
@@ -303,20 +316,63 @@ export async function listRagflowDatasets(
   return datasets === null ? { result: 'upstream-error' } : { result: 'ok', datasets };
 }
 
+/**
+ * One keyed GET of a path inside one dataset, with the list body cap; an empty address or key is
+ * not configured and sends nothing. rc2's 404/403 (a dataset the key cannot see) is
+ * invalid-request.
+ */
+function datasetRead(
+  settings: RagflowConnection,
+  path: string,
+  signal: AbortSignal,
+  deadlineMs: number,
+  send: Send,
+): Promise<Answer | RagflowFailure> {
+  if (settings.baseURL === '' || settings.apiKey === '') return Promise.resolve('not-configured');
+  const headers = keyHeaders(settings.apiKey);
+  if (headers === null) return Promise.resolve('not-configured');
+  return call(
+    new Request(endpoint(settings.baseURL, path), { headers, redirect: 'manual' }),
+    signal,
+    deadlineMs,
+    send,
+    RAGFLOW_LIST_BODY_LIMIT,
+    DOCUMENT_CODES,
+  );
+}
+
+/** A count RAGFlow reports across pages: a non-negative safe integer. */
+const isCount = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+/**
+ * The `total` and the page's rows under `key` of a paged answer, or null unless `total` is a count
+ * and the rows an array of at most `pageSize` entries.
+ */
+function pageRows(
+  answer: Answer,
+  key: string,
+  pageSize: number,
+): { data: object; total: number; rows: readonly unknown[] } | null {
+  const data = answer.data;
+  if (typeof data !== 'object' || data === null || !('total' in data) || !(key in data))
+    return null;
+  const total = data.total;
+  const rows: unknown = (data as Record<string, unknown>)[key];
+  if (!isCount(total) || !Array.isArray(rows) || rows.length > pageSize) return null;
+  return { data, total, rows };
+}
+
 /** The total and rows of one document page, or null when anything about it is not valid. */
 function documentPage(
   answer: Answer,
   datasetId: string,
   pageSize: number,
 ): { total: number; documents: RagflowEntry[] } | null {
-  const data = answer.data;
-  if (typeof data !== 'object' || data === null || !('total' in data) || !('docs' in data))
-    return null;
-  const { total, docs } = data;
-  if (typeof total !== 'number' || !Number.isSafeInteger(total) || total < 0) return null;
-  if (!Array.isArray(docs)) return null;
-  const rows: readonly unknown[] = docs;
-  if (rows.length > pageSize || rows.length > total) return null;
+  const page = pageRows(answer, 'docs', pageSize);
+  if (page === null) return null;
+  const { total, rows } = page;
+  if (rows.length > total) return null;
   const documents = entries(rows, (row) => 'dataset_id' in row && row.dataset_id === datasetId);
   return documents === null ? null : { total, documents };
 }
@@ -336,26 +392,71 @@ export async function listRagflowDocuments(
   deadlineMs: number,
   send: Send = fetch,
 ): Promise<RagflowDocumentsOutcome> {
-  if (settings.baseURL === '' || settings.apiKey === '') return { result: 'not-configured' };
-  const headers = keyHeaders(settings.apiKey);
-  if (headers === null) return { result: 'not-configured' };
   // encodeURIComponent keeps a decoded space as %20; URLSearchParams would send "+".
   const filter =
     query.keywords === undefined ? '' : `&keywords=${encodeURIComponent(query.keywords)}`;
   const path =
     `/api/v1/datasets/${datasetId}/documents?page=${String(query.page)}` +
     `&page_size=${String(query.pageSize)}&orderby=create_time&desc=false${filter}`;
-  const answer = await call(
-    new Request(endpoint(settings.baseURL, path), { headers, redirect: 'manual' }),
-    signal,
-    deadlineMs,
-    send,
-    RAGFLOW_LIST_BODY_LIMIT,
-    DOCUMENT_CODES,
-  );
+  const answer = await datasetRead(settings, path, signal, deadlineMs, send);
   if (typeof answer === 'string') return { result: answer };
   const documents = documentPage(answer, datasetId, query.pageSize);
   return documents === null ? { result: 'upstream-error' } : { result: 'ok', ...documents };
+}
+
+/**
+ * The total and texts of one chunk page, or null unless the answer names the requested document
+ * of the requested dataset and every row carries a string `content_with_weight`. rc2 filters the
+ * rows by document itself and gives them no document field, so ownership is checked on `doc`.
+ */
+function chunkPage(
+  answer: Answer,
+  datasetId: string,
+  documentId: string,
+  pageSize: number,
+): { total: number; chunks: RagflowDocumentChunk[] } | null {
+  const page = pageRows(answer, 'chunks', pageSize);
+  if (page === null || !('doc' in page.data)) return null;
+  const doc = page.data.doc;
+  if (typeof doc !== 'object' || doc === null || !('id' in doc) || !('dataset_id' in doc))
+    return null;
+  if (doc.id !== documentId || doc.dataset_id !== datasetId) return null;
+  const chunks: RagflowDocumentChunk[] = [];
+  for (const row of page.rows) {
+    const content =
+      typeof row === 'object' && row !== null && 'content_with_weight' in row
+        ? row.content_with_weight
+        : undefined;
+    if (typeof content !== 'string') return null;
+    chunks.push({ content });
+  }
+  return { total: page.total, chunks };
+}
+
+/**
+ * Reads one page of a document's parsed chunks in a single request; an empty address or key is
+ * not configured and sends nothing. The IDs and page come validated from the route. Neither
+ * `available` nor `keywords` is sent, so chunks disabled for retrieval are listed too. Only each
+ * chunk's text leaves this function, in upstream order, and only when the whole page is valid and
+ * belongs to the requested document of the requested dataset. A dataset the key cannot see
+ * answers invalid-request; a missing document or dataset is rc2's HTTP 500, upstream-error.
+ */
+export async function listRagflowChunks(
+  settings: RagflowConnection,
+  datasetId: string,
+  documentId: string,
+  query: Pick<RagflowDocumentsQuery, 'page' | 'pageSize'>,
+  signal: AbortSignal,
+  deadlineMs: number,
+  send: Send = fetch,
+): Promise<RagflowChunksOutcome> {
+  const path =
+    `/api/v1/datasets/${datasetId}/documents/${documentId}/chunks?page=${String(query.page)}` +
+    `&page_size=${String(query.pageSize)}`;
+  const answer = await datasetRead(settings, path, signal, deadlineMs, send);
+  if (typeof answer === 'string') return { result: answer };
+  const chunks = chunkPage(answer, datasetId, documentId, query.pageSize);
+  return chunks === null ? { result: 'upstream-error' } : { result: 'ok', ...chunks };
 }
 
 /** The upstream body: the saved parameters only, never anything the instance supplied. */

@@ -11,8 +11,29 @@ export type KbAnswer =
       readonly datasets?: KbEntry[];
       readonly total?: number;
       readonly documents?: KbEntry[];
+      readonly chunks?: KbChunk[];
     }
   | { readonly result: 'not-configured' | 'failed' };
+
+/** One parsed chunk of a previewed file: its text only. */
+export interface KbChunk {
+  readonly content: string;
+}
+
+/** The file a preview shows. */
+export interface KbPreviewTarget {
+  readonly datasetId: string;
+  readonly documentId: string;
+  readonly name: string;
+}
+
+/** What a preview shows for one page. */
+export interface KbPreviewView {
+  readonly state: 'loading' | 'not-configured' | 'failed' | 'empty' | 'list';
+  readonly page: number;
+  readonly total?: number;
+  readonly chunks?: KbChunk[];
+}
 
 /** What an expanded library shows for one page and filter. */
 export interface KbFilesView {

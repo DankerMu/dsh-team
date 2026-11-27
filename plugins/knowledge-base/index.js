@@ -2,10 +2,10 @@
 /**
  * Host half of the knowledge-base plugin. It validates the platform address the managed overlay
  * may give it, publishes whether the plugin is usable on this instance, and registers the browser
- * routes that forward the sidebar panel's reads to the platform's instance RAGFlow proxy, the
- * `/kb-scope` command and the `kbScope` projection that keep each Session's retrieval scope, and the
- * `knowledge_base_search` and `knowledge_base_list` tools, which retrieve within and list the root
- * Session's turn snapshot.
+ * routes that forward the sidebar panel's reads (libraries, files and a file's parsed content) to
+ * the platform's instance RAGFlow proxy, the `/kb-scope` command and the `kbScope` projection that
+ * keep each Session's retrieval scope, and the `knowledge_base_search` and `knowledge_base_list`
+ * tools, which retrieve within and list the root Session's turn snapshot.
  */
 export const name = 'dsh-team-knowledge-base';
 export const inject = ['connection'];
@@ -324,22 +324,46 @@ function documentsRoute(datasetId, page, pageSize, keywords) {
 }
 
 /**
+ * The library and page every paged browser query names, or null unless all three are valid.
+ * @param {Map<string, string>} fields
+ */
+function pagedFields(fields) {
+  const datasetId = fields.get('datasetId');
+  const page = fields.get('page');
+  const pageSize = fields.get('pageSize');
+  if (datasetId === undefined || !ENTRY_ID.test(datasetId)) return null;
+  if (page === undefined || !PAGE.test(page)) return null;
+  if (pageSize === undefined || !PAGE_SIZE.test(pageSize)) return null;
+  return { datasetId, page, pageSize };
+}
+
+/**
  * The proxy documents path for a valid browser query, or null for anything else.
  * @param {string} url
  */
 function documentsPath(url) {
   const fields = queryFields(url);
   if (fields === null) return null;
-  const datasetId = fields.get('datasetId');
-  const page = fields.get('page');
-  const pageSize = fields.get('pageSize');
   const keywords = fields.get('keywords');
   if (fields.size !== (keywords === undefined ? 3 : 4)) return null;
-  if (datasetId === undefined || !ENTRY_ID.test(datasetId)) return null;
-  if (page === undefined || !PAGE.test(page)) return null;
-  if (pageSize === undefined || !PAGE_SIZE.test(pageSize)) return null;
-  if (keywords !== undefined && !isFilter(keywords)) return null;
-  return documentsRoute(datasetId, page, pageSize, keywords);
+  const paged = pagedFields(fields);
+  if (paged === null || (keywords !== undefined && !isFilter(keywords))) return null;
+  return documentsRoute(paged.datasetId, paged.page, paged.pageSize, keywords);
+}
+
+/**
+ * The proxy chunks path for a valid preview query (exactly the library, the document and the
+ * page), or null for anything else.
+ * @param {string} url
+ */
+function chunksPath(url) {
+  const fields = queryFields(url);
+  const documentId = fields?.get('documentId');
+  if (fields?.size !== 4 || documentId === undefined || !ENTRY_ID.test(documentId)) return null;
+  const paged = pagedFields(fields);
+  if (paged === null) return null;
+  const { datasetId, page, pageSize } = paged;
+  return `${PROXY}/datasets/${datasetId}/documents/${documentId}/chunks?page=${page}&page_size=${pageSize}`;
 }
 
 /**
@@ -391,6 +415,39 @@ function chunksOf(value) {
 }
 
 /**
+ * A document's preview chunks with only their text, or undefined when any is malformed.
+ * @param {unknown} value
+ * @returns {{ content: string }[] | undefined}
+ */
+function previewChunks(value) {
+  if (!Array.isArray(value)) return undefined;
+  const chunks = [];
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null || typeof entry.content !== 'string')
+      return undefined;
+    chunks.push({ content: entry.content });
+  }
+  return chunks;
+}
+
+/**
+ * A paged `ok` answer: the count and one page of documents or of preview chunks.
+ * @param {Record<string, unknown>} record
+ * @param {'documents' | 'chunks'} kind
+ * @returns {import('./types.js').KnowledgeBaseAnswer | undefined}
+ */
+function pagedAnswer(record, kind) {
+  const total = record.total;
+  if (typeof total !== 'number' || !Number.isSafeInteger(total) || total < 0) return undefined;
+  if (kind === 'chunks') {
+    const chunks = previewChunks(record.chunks);
+    return chunks && { result: 'ok', total, chunks };
+  }
+  const documents = entries(record.documents);
+  return documents && { result: 'ok', total, documents };
+}
+
+/**
  * The proxy retrieval answer: `ok` with chunks or `no-results`, both with the excluded IDs.
  * @param {Record<string, unknown>} record
  * @returns {import('./types.js').KnowledgeBaseAnswer | undefined}
@@ -418,14 +475,9 @@ function answerOf(body, kind) {
     return /** @type {import('./types.js').KnowledgeBaseAnswer} */ ({ result });
   if (kind === 'retrieval') return retrievalAnswer(record);
   if (result !== 'ok') return undefined;
-  if (kind === 'datasets') {
-    const datasets = entries(record.datasets);
-    return datasets && { result: 'ok', datasets };
-  }
-  const total = record.total;
-  if (typeof total !== 'number' || !Number.isSafeInteger(total) || total < 0) return undefined;
-  const documents = entries(record.documents);
-  return documents && { result: 'ok', total, documents };
+  if (kind !== 'datasets') return pagedAnswer(record, kind);
+  const datasets = entries(record.datasets);
+  return datasets && { result: 'ok', datasets };
 }
 
 /**
@@ -901,7 +953,7 @@ export function apply(ctx, config) {
   };
   /**
    * @param {Request} browser
-   * @param {'datasets' | 'documents'} kind
+   * @param {'datasets' | 'documents' | 'chunks'} kind
    * @param {string | null} path
    */
   const forward = (browser, kind, path) =>
@@ -972,5 +1024,11 @@ export function apply(ctx, config) {
     methods: ['GET'],
     requestBody: 'buffered',
     fetch: (request) => forward(request, 'documents', documentsPath(request.url)),
+  });
+  ctx.connection.fetch.register({
+    path: '/api/knowledge-base.chunks',
+    methods: ['GET'],
+    requestBody: 'buffered',
+    fetch: (request) => forward(request, 'chunks', chunksPath(request.url)),
   });
 }

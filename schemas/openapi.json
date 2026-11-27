@@ -7798,6 +7798,150 @@
         }
       }
     },
+    "/_platform/instance-api/ragflow/datasets/{id}/documents/{documentId}/chunks": {
+      "get": {
+        "summary": "List one page of the parsed text chunks of one document of one dataset of the configured RAGFlow, in RAGFlow order, for an authenticated instance; never the original file. Chunks disabled for retrieval are listed too. An answer about another document or dataset is upstream-error. A malformed ID, a fragment, a repeated, unknown or valueless key, an undecodable escape and a dataset the key cannot see answer invalid-request; a missing document or dataset is upstream-error.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,5}$"
+            },
+            "in": "query",
+            "name": "page",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^(100|[1-9][0-9]?)$"
+            },
+            "in": "query",
+            "name": "page_size",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            },
+            "in": "path",
+            "name": "documentId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "result"
+                  ],
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "not-configured",
+                        "unavailable",
+                        "timeout",
+                        "upstream-error",
+                        "invalid-request",
+                        "no-results"
+                      ]
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "chunks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "content"
+                        ],
+                        "properties": {
+                          "content": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/_platform/instance-api/ragflow/retrieval": {
       "post": {
         "summary": "Retrieve chunks of the given datasets of the configured RAGFlow with the saved retrieval parameters for an authenticated instance. Requested datasets that no longer exist are dropped and listed in excluded; when none remains nothing is retrieved and the result is no-results. Any other body key, a blank question, an empty, repeated or malformed dataset ID and unparseable JSON answer invalid-request.",
