@@ -540,6 +540,8 @@ interface ObserverScenario {
   name: string;
   inspectPath: string;
   deletePath: string;
+  /** Test-only synchronous delay between the create deadline's creation and the request. */
+  submissionDelayMs?: number | undefined;
 }
 
 export function observerScenarioSource(input: ObserverScenario): string {
@@ -557,16 +559,22 @@ export function observerScenarioSource(input: ObserverScenario): string {
     name,
     inspectPath,
     deletePath,
+    submissionDelayMs,
   } = input;
-  const create = `client.json('POST',${JSON.stringify(createPath)},${JSON.stringify(body)},AbortSignal.timeout(200))`;
-  const stalledCreate = `try{created=await ${create};}
-catch(error){failure=error;}`;
-  // Same monotonic clock as the engine; issued follows the synchronous submit and request write.
-  const timedCreate = `const now=()=>Number(process.hrtime.bigint())/1e6;
-const called=now();
-let issued,settled;
-try{const pending=${create};issued=now();created=await pending;}
-catch(error){settled=now();failure=error;}`;
+  const delay =
+    submissionDelayMs === undefined
+      ? ''
+      : `for(const until=now()+${String(submissionDelayMs)};now()<until;);`;
+  // The stall case keeps 200 ms so its incomplete response is really cancelled. Non-stall cases
+  // test no cancellation, and their deadline also covers the synchronous submission work before
+  // the request is written, which took 212 ms on CI (#746): they use the ordinary 2000 ms.
+  const deadline = stalls ? 200 : 2000;
+  const timing = `process.stderr.write('create-timing:'+JSON.stringify({called,issued,settled})+'\\n');`;
+  // A stall child cannot tell its expected abort from one before the request was sent, so it
+  // writes its timing only on a later failure that then exits non-zero; a passing run writes none.
+  const [attributed, attribution] = stalls
+    ? ['try{', `}catch(error){${timing}throw error;}`]
+    : ['', ''];
   const source = `import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import fs from 'node:fs';
@@ -599,14 +607,19 @@ process.stdout.write(result.state);`)}
   });
 }
 let failure,created;
+// Same monotonic clock as the engine; issued follows the synchronous submit and request write.
+const now=()=>Number(process.hrtime.bigint())/1e6;
+const called=now();
+let issued,settled;
 // Real cancellation must close the actual incomplete HTTP response, not a simulated timer.
-${stalls ? stalledCreate : timedCreate}
-if(${JSON.stringify(stalls)}){
+try{const deadline=AbortSignal.timeout(${String(deadline)});${delay}const pending=client.json('POST',${JSON.stringify(createPath)},${JSON.stringify(body)},deadline);issued=now();created=await pending;}
+catch(error){settled=now();failure=error;}
+${attributed}if(${JSON.stringify(stalls)}){
   assert(failure instanceof Error);
   assert(!(failure instanceof DockerHttpError));
   assert(!Object.hasOwn(failure,'cause'));
 }else{
-  if(failure!==undefined)process.stderr.write('create-timing:'+JSON.stringify({called,issued,settled})+'\\n');
+  if(failure!==undefined)${timing}
   assert.equal(failure,undefined);
   assert.deepEqual(created,{Id:${JSON.stringify(ownedId)}});
 }
@@ -628,6 +641,7 @@ await assert.rejects(client.json('GET','/large',undefined,AbortSignal.timeout(20
 const logs=client.logs('/logs',AbortSignal.timeout(2000));
 assert.deepEqual(await logs.next(),{done:false,value:{stream:'stdout',data:Buffer.from('a')}});
 await logs.return(undefined);
+${attribution}
 process.stdout.write(${JSON.stringify(stalls ? 'create-aborted-owned-cleanup-observed\n' : 'create-completed-owned-cleanup-observed\n')});`;
   return source;
 }
