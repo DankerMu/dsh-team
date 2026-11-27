@@ -26,6 +26,6 @@
 
 ## 2. Verification
 
-- [x] 2.1 `pnpm check:fast`, `pnpm test`, `pnpm test:integration` and `pnpm test:guardrails` exit 0 locally.
-- [ ] 2.2 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
-- [ ] 2.3 `pnpm test:stack` on the local lane with the new case.
+- [x] 2.1 `pnpm test`, `pnpm test:integration`, `pnpm lint` and `pnpm typecheck` exit 0 locally. `pnpm check:fast` and `pnpm test:guardrails` fail locally only on the untracked `.workplans/`; CI Fast checks and Guardrail self-test on the PR head are their evidence.
+- [x] 2.2 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
+- [x] 2.3 `pnpm test:stack` on the local lane with the new case.

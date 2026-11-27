@@ -94,3 +94,57 @@
 
 - **WHEN** 检索分别得到 `no-results`、`invalid-request`、`not-configured`、`timeout`、`unavailable`、`upstream-error`
 - **THEN** 员工看到六条互不相同的中文提示，对话可以继续
+
+### Requirement: 知识库面板的展示与 DSH 侧栏一致
+
+「知识库」面板 MUST 使用 DSH 的样式变量，在浅色和深色主题下都可读。
+
+- 每个库 MUST 显示为一行，带展开标记，默认折叠。
+- 展开后 MUST 显示该库当前列表的文件数（有文件名筛选时为匹配数）、文件名筛选和不带项目符号的文件行。
+- 只有一页时 MUST NOT 显示翻页控件。
+- 展示的变化 MUST NOT 增加请求，也 MUST NOT 改变面板的状态、文案和行为。
+
+#### Scenario: 展开一个库
+
+- **WHEN** 员工点开 `dsh-team-seed-policies`（2 个文件）
+- **THEN** 该行的展开标记变为展开态，下面显示「共 2 个文件」、文件名筛选和两行文件名，不显示翻页控件；其他库保持折叠
+
+#### Scenario: 筛选后显示匹配数
+
+- **WHEN** 在该库中按文件名筛选 `expense`
+- **THEN** 显示「共 1 个文件」和 `expense-policy.txt` 一行，不显示翻页控件
+
+#### Scenario: 超过一页时显示翻页
+
+- **WHEN** 某个库的文件数为 41（每页 20 个）
+- **THEN** 展开后显示「共 41 个文件」「上一页」「第 1 / 3 页」「下一页」，翻页行为与原来相同
+
+#### Scenario: 非列表状态不显示文件数
+
+- **WHEN** 展开后文件列表处于加载中、空库、无匹配、失败或未配置状态
+- **THEN** 只显示该状态原有的文案（失败时带「重试」），不显示文件数和翻页控件
+
+### Requirement: Agent 可以列出本轮范围内的知识库和文件
+
+插件 MUST 提供 Agent 工具 `knowledge_base_list`。
+
+- 不指定库时，它列出本轮检索范围内的知识库名称。
+- 指定库名时，它列出该库的文件名，支持文件名关键字和分页。
+- 范围的确定方式 MUST 与检索工具相同：子 Agent 使用委派时记录的根 Session 范围，MUST NOT 扩大。
+- 范围外的库与不存在的库 MUST 返回相同的结果。
+- 结果 MUST 只包含名称，MUST NOT 包含库或文件的 ID。
+
+#### Scenario: 问知识库里有什么
+
+- **WHEN** 本轮范围只选了 `dsh-team-seed-policies`，员工问「知识库里有哪些文件」，Agent 先不带库名调用、再带该库名调用 `knowledge_base_list`
+- **THEN** 第一次结果只有 `dsh-team-seed-policies`，第二次结果是该库的两个文件名，总数 2
+
+#### Scenario: 范围外的库不可见
+
+- **WHEN** 本轮范围只选了库 A，Agent 调用 `knowledge_base_list` 并指定库 B 的名称
+- **THEN** 结果与指定一个不存在的库名相同，不发出 B 的文件列表请求
+
+#### Scenario: 没有选择知识库
+
+- **WHEN** 本轮取消了全选，Agent 调用 `knowledge_base_list`
+- **THEN** 结果为本轮没有选择知识库，不发出任何请求

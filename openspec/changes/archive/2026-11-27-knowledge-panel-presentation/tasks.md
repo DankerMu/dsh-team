@@ -51,8 +51,8 @@
 ## 2. Verification
 
 - [x] 2.1 `pnpm lint`, `pnpm typecheck`, `pnpm test` and `pnpm test:integration` exit 0 locally. `pnpm check:fast` fails locally only on untracked `.workplans/`; CI Fast checks is the evidence for it.
-- [ ] 2.2 `pnpm test:stack` passes with its panel steps and `knowledge-panel-stack-fixture.ts` unchanged.
-- [ ] 2.3 Screenshots taken by the parent against a running deployment of the PR head, on the local stack's seed libraries.
+- [x] 2.2 `pnpm test:stack` passes with its panel steps and `knowledge-panel-stack-fixture.ts` unchanged.
+- [x] 2.3 Screenshots taken by the parent against a running deployment of the PR head, on the local stack's seed libraries.
   - Themes: Playwright `colorScheme: 'light'` and `'dark'` emulation. If DSH does not follow the system scheme, use its own appearance setting, and record which.
   - Five shots per theme:
     - Collapsed: at least the rows `dsh-team-seed-policies`, `-products` and `-minutes` (the local RAGFlow may hold other libraries), chevrons collapsed, no file region.
@@ -61,4 +61,4 @@
     - Library search `kb-nothing`: 「没有名称匹配的知识库」.
     - Failed: Playwright `page.route` answers `api/knowledge-base.datasets` with `{"result":"unavailable"}`; after 「刷新」 the panel shows 「知识库加载失败」 with 「重试」. RAGFlow itself is never stopped for screenshots.
   - Attach them to the PR.
-- [ ] 2.4 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy` (non-docs change).
+- [x] 2.4 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy` (non-docs change).
