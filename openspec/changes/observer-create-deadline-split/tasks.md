@@ -23,7 +23,7 @@ Write each probe first and record its red output against the unchanged fixture, 
 
 ## 2. Verification
 
-- [ ] 2.1 `pnpm exec vitest run --project integration platform/test/deployed-docker-observer.integration.test.ts`, `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code`, `pnpm duplicate-code`: exit 0.
+- [x] 2.1 `pnpm exec vitest run --project integration platform/test/deployed-docker-observer.integration.test.ts`, `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code`, `pnpm duplicate-code`: exit 0.
 - [ ] 2.2 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
 
 ## Acceptance mapping (#746)
