@@ -25,4 +25,4 @@ Write each case first and record its red output, then change the code.
 
 - [x] 2.1 The touched integration files, then `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code`, `pnpm duplicate-code`, `pnpm lint:tests`: exit 0.
 - [x] 2.2 One local `pnpm test:stack` on the final head.
-- [ ] 2.3 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
+- [x] 2.3 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.

@@ -35,7 +35,7 @@ When an inner wait times out, the failure SHALL name the phase and, except for t
 - holder: which phase timed out (`ready` or `exit`); each phase is bounded by its own fixed deadline, so the phase name determines the bound and no elapsed time is reported;
 - main-process startup: whether the source process is still present.
 
-A wait made of two phases SHALL give each phase its own deadline.
+A wait made of two phases SHALL give each phase its own deadline. The holder script's exit deadline after SIGTERM SHALL state its measured basis: the load bands, host and maximum TERM-to-exit time it was measured at, or the load band in which it holds, together with the value measured in that band.
 
 #### Scenario: An inner wait outlives the case budget
 
@@ -46,6 +46,11 @@ A wait made of two phases SHALL give each phase its own deadline.
 
 - **WHEN** the holder script's ready marker arrives late but within its own deadline
 - **THEN** the exit wait after SIGTERM still gets its full deadline, and the case reports no timeout
+
+#### Scenario: The holder exit bound states its basis
+
+- **WHEN** a reader looks up the holder script's exit deadline after SIGTERM
+- **THEN** its comment names the load bands, host and measured maxima it rests on, or the load band in which it holds
 
 ### Requirement: 主表站点在负载下可归因失败，"已观察到"的断言在事件上同步
 
@@ -136,6 +141,11 @@ The RAGFlow proxy close-abort case, the canonical dev-stop lifecycle case's user
 - **WHEN** the chrome-start preparation takes longer than the near-deadline offset
 - **THEN** the acknowledgement wait still starts with the full offset, and the row's attribution is unchanged
 
+#### Scenario: The application close never finishes
+
+- **WHEN** an `onClose` hook in the close-abort case never settles
+- **THEN** the case fails below its budget with a message starting with the close-abort application close step, the bounded teardown close reported with it, and no runner timeout
+
 ### Requirement: The shared HTTP helpers fail a stalled send or observation before the default case budget, naming the stall
 
 The shared integration helper that sends one HTTP request SHALL, by default, bound each send, its close wait included, below vitest's default case budget, with a named bound that states its measured basis. A caller with a far larger case budget MAY pass a larger named bound. When the bound or the caller's signal aborts a send, the failure SHALL name the method, the path and the phase (response headers or response body), and keep the original error as its cause. Other request errors SHALL pass through unchanged. A stalled close wait SHALL fail naming the close phase without hiding an earlier send failure. The shared peer-observation helper SHALL accept a label and include it in its failure.
@@ -154,3 +164,57 @@ The shared integration helper that sends one HTTP request SHALL, by default, bou
 
 - **WHEN** a labelled peer observation never settles
 - **THEN** the failure carries that label
+
+### Requirement: The shared application teardown close is bounded and never replaces the case's failure
+
+The integration helper that builds the platform application for a case SHALL bound its teardown close by a deadline the case passes, or by a measured default when it passes none. When the close does not settle in time, the case SHALL fail with a message naming the teardown close. The teardown deadline SHALL be separate from the deadline of the case's own steps, so a stalled step never prevents a healthy application from closing. When the case had already failed, that failure SHALL stay first: an `Error` SHALL be rethrown as the same object with the teardown failure added to its message, even when that message is a read-only accessor; an `Error` that can take no property (for example a frozen one) and any other value SHALL be rethrown unchanged. A healthy teardown SHALL rethrow the case's failure unchanged. A case whose body leaves less than the default bound before its runner timeout MAY hit that timeout on a hung close unless it passes its own teardown deadline.
+
+#### Scenario: The case succeeds but its close hangs
+
+- **WHEN** a case's body succeeds within its runner timeout minus the teardown bound and an `onClose` hook never settles
+- **THEN** the case fails with the teardown close named, before its runner timeout
+
+#### Scenario: The case fails and its close hangs
+
+- **WHEN** a case's body fails with an `Error` that is not frozen and an `onClose` hook never settles
+- **THEN** the reported failure is that same error, its message starting with the body's failure and also naming the teardown close
+
+#### Scenario: A case passes its own teardown deadline
+
+- **WHEN** a case passes a teardown deadline later than the default bound and an `onClose` hook never settles
+- **THEN** the teardown close fails at that deadline, not at the default bound
+
+#### Scenario: The case fails and its close is healthy
+
+- **WHEN** a case's body fails and the teardown close settles
+- **THEN** the body's failure is rethrown unchanged
+
+### Requirement: The instance lifecycle case's observations name their phase and its default-bound aggregate waits have measured bounds
+
+Every HTTP peer observation in the instance lifecycle integration file SHALL pass a unique phase label, so a stalled observation reports its site.
+
+In the canonical dev-stop case, each default-bound scenario observation that waits for a whole child process or a run of background requests SHALL carry a comment stating its measured basis: load band, runs, maximum and multiple. That covers the readiness after the start POST and the restarted `dev:bg` exit. Such an observation SHALL get a named bound when the default leaves less than ten times its measured maximum. The case's budget ledger SHALL account for those bounds, and those bounds plus the measured setup SHALL stay below the case budget.
+
+#### Scenario: A scenario-phase stall is attributable
+
+- **WHEN** an observation in the lifecycle case's scenario phase or in its dev-lifecycle helper's setup never settles
+- **THEN** the case fails with `HTTP peer observation did not settle: <label>`, naming that observation
+
+#### Scenario: A cleanup-phase stall is attributable
+
+- **WHEN** the commands-settlement or `dev:stop` observation in the dev-lifecycle cleanup never settles
+- **THEN** the case's cleanup failure marks that step `failed` and carries the labelled observation error in its cause
+
+### Requirement: The firewall holder script cases run the script under dash, the shell the image's /bin/sh links to
+
+The firewall holder script integration cases SHALL run the holder script under dash, the shell the production image's `/bin/sh` links to, and SHALL name it explicitly. When dash is missing, the cases SHALL fail with an error naming it, and SHALL NOT fall back to another shell.
+
+#### Scenario: A host whose /bin/sh differs from the image's
+
+- **WHEN** the cases run on a host whose `/bin/sh` is not dash, such as macOS bash 3.2
+- **THEN** the script still runs under dash, and a held case exits on its first SIGTERM
+
+#### Scenario: dash is missing
+
+- **WHEN** `/bin/dash` does not exist on the host
+- **THEN** the case fails with an error naming `/bin/dash`, before any spawn

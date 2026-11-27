@@ -36,7 +36,7 @@
 - [x] 2.1 Run the same probe under `/bin/dash`, with the same conditions and the same N: 0 hangs, and every round exits `code: 0` within `EXIT_MS`.
 - [x] 2.2 `pnpm exec vitest run --project integration platform/test/document-server-net-script.integration.test.ts`, `pnpm lint` and `pnpm typecheck` exit 0.
 - [x] 2.3 Run 5 consecutive full `pnpm test:integration` runs, each started at 1-minute load ≥ 13 and < 67 with bounded `yes` generators. All must pass. This is a regression check; the probe carries the proof.
-- [ ] 2.4 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
+- [x] 2.4 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
 
 ## Acceptance mapping (#752)
 

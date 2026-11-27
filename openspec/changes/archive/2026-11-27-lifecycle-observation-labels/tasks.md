@@ -32,7 +32,7 @@
 
 - [x] 2.1 `pnpm exec vitest run --project integration platform/test/instance-lifecycle.integration.test.ts`, `pnpm lint` and `pnpm typecheck` exit 0.
 - [x] 2.2 Run 5 consecutive full `pnpm test:integration` runs, each starting at load ≥ 13 and < 67 with 12 bounded `yes` generators. All pass. Record each start load and rc.
-- [ ] 2.3 Run `pnpm test:docker` and `pnpm test:deploy` on the exact head on the VPS.
+- [x] 2.3 Run `pnpm test:docker` and `pnpm test:deploy` on the exact head on the VPS.
 
 ## Acceptance mapping (#749)
 

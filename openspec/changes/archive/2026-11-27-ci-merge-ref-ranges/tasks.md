@@ -31,6 +31,6 @@ Write each guardrail case first against main's step text and record its red outp
 
 - [x] 2.1 `pnpm test:guardrails`: exit 0, new cases PASS (red output for each recorded from main's step text).
 - [x] 2.2 `pnpm lint:shell`, `pnpm lint:ci`, `pnpm lint:agents`, `pnpm lint`, `pnpm fmt:check` (tracked files): exit 0.
-- [ ] 2.3 CI on the PR head green. `Trusted Docker and Compose evidence` (scope step) and `Lockfile-manifest consistency` run the guard on the real merge ref. This PR carries `diff-limit-exempt`, so `Enforce max PR diff lines` is skipped here; the runner's `--attr-source` support and the guard under `pull_request` are proven by the `Guardrail self-test` job (ubuntu-24.04), whose `size_attrs` (301), `size_symlink` (501), merge-ref and criss-cross cases must PASS in its log.
-- [ ] 2.4 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy` (Docker evidence gate; the diff is not docs-only).
+- [x] 2.3 CI on the PR head green. `Trusted Docker and Compose evidence` (scope step) and `Lockfile-manifest consistency` run the guard on the real merge ref. This PR carries `diff-limit-exempt`, so `Enforce max PR diff lines` is skipped here; the runner's `--attr-source` support and the guard under `pull_request` are proven by the `Guardrail self-test` job (ubuntu-24.04), whose `size_attrs` (301), `size_symlink` (501), merge-ref and criss-cross cases must PASS in its log.
+- [x] 2.4 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy` (Docker evidence gate; the diff is not docs-only).
 - [x] 2.5 Post item 3's evidence on #734.

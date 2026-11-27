@@ -309,9 +309,10 @@ When an Office stack session failure wraps a stack workbench failure, the cause-
 
 ### Requirement: Office stack double failures report every scrubbed cause and hold nothing raw
 
-This requirement covers three cases:
+This requirement covers four cases:
 
 - an Office stack lane fails and its retirement then also fails;
+- a stack lane fails and its work-file cleanup then also fails;
 - a stack workbench session fails and its browser close then also fails;
 - the browser close alone fails.
 
@@ -323,6 +324,13 @@ In each case the thrown error's message SHALL carry the scrubbed text of every c
 - **AND** its retirement also fails with a message containing a document key
 - **THEN** the report shows both reasons with the keys redacted
 - **AND** no property of the thrown error holds a raw key
+
+#### Scenario: Lane and work-file cleanup both fail
+
+- **WHEN** a stack lane fails with a message containing a document key
+- **AND** removing its work-directory files also fails with a message containing a document key
+- **THEN** the thrown error is a plain error whose message shows both reasons with the keys redacted
+- **AND** no property of it holds a raw key, whether or not a retirement wrapper surrounds the lane
 
 #### Scenario: Session and browser close both fail
 
@@ -337,12 +345,22 @@ In each case the thrown error's message SHALL carry the scrubbed text of every c
 
 ### Requirement: Stack test child input never raises an uncaught pipe error
 
-Integration tests that write input to a child process SHALL tolerate the child exiting without reading. An `EPIPE` on stdin SHALL be ignored, and any other stdin error SHALL fail the test.
+Integration tests, and the Docker command boundary they share, that write input to a child process SHALL tolerate the child exiting without reading. An `EPIPE` or `ECONNRESET` on stdin (the child closed its end without reading) SHALL be ignored, and any other stdin error SHALL fail the test. In the Docker boundary's asynchronous command, any other stdin error SHALL terminate the child and settle the command's result as failed with that error, within the command's timeout, never as an uncaught exception or an unhandled rejection.
 
 #### Scenario: The child exits without reading
 
 - **WHEN** a child process exits before reading a large input
 - **THEN** no uncaught error is raised and the test file's run exits 0
+
+#### Scenario: The Docker command's child exits without reading
+
+- **WHEN** the Docker boundary's asynchronous command is given an input far larger than a pipe buffer and its child exits without reading it
+- **THEN** the result carries the child's own status and output with no error, and the test file's run exits 0
+
+#### Scenario: The Docker command's stdin fails with another error
+
+- **WHEN** the Docker boundary's asynchronous command's stdin fails with an error other than `EPIPE` or `ECONNRESET` while its child would never exit
+- **THEN** the child is killed, the result settles before the command's timeout with a null status and that error, and no uncaught exception or unhandled rejection is raised
 
 ### Requirement: Masked Office sessions require a Chinese UI
 
@@ -418,3 +436,18 @@ Each clean and unsaved Office rewrite case SHALL record whether the file's diges
 
 - **WHEN** the file's digest after the close equals its digest after the save, in a case whose expectation is that the close rewrites it
 - **THEN** the case fails
+
+### Requirement: Stack lane assertions never print a secret
+
+An `expect` assertion in an Office or sidebar stack real-lane fixture SHALL NOT print a document key, a JWT or a URL query when it fails: not in its expected value, its received value or its message. This applies whenever a printed part is built from lane data (page, DOM or URL state, console or network records, Document Server or Docker output, administrator configuration read back) that is not first scrubbed. A check that a value is free of a secret SHALL fail without printing that secret. A single lane failure rethrown unchanged SHALL therefore carry no such secret from these assertions.
+
+#### Scenario: The forgotten positive control contains A's key
+
+- **WHEN** the forgotten lane's positive control or present list contains A's document key
+- **THEN** the check fails
+- **AND** nothing it prints contains A's key
+
+#### Scenario: An assertion message built from page state
+
+- **WHEN** an Office stack `expect` assertion whose message is built from page state fails while that state holds a document key
+- **THEN** the printed message carries the key redacted
