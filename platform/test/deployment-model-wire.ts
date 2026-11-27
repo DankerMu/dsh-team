@@ -101,27 +101,35 @@ function ownedBash(value: unknown): { marker: string; command: string; nonce: st
     throw new Error('Invalid owned model configuration');
   return { marker: value.marker, command: value.command, nonce: value.nonce };
 }
+/** An optional object of exactly `marker` and one more key, both non-empty strings. */
+function ownedMarked<K extends string>(value: unknown, key: K) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null)
+    throw new Error('Invalid owned model configuration');
+  const fields = value as Record<string, unknown>;
+  const { marker, [key]: other } = fields;
+  if (
+    Object.keys(fields).sort().join() !== ['marker', key].sort().join() ||
+    typeof marker !== 'string' ||
+    marker === '' ||
+    typeof other !== 'string' ||
+    other === ''
+  )
+    throw new Error('Invalid owned model configuration');
+  return { marker, [key]: other } as { marker: string } & Record<K, string>;
+}
 /**
  * Optional nonsecret text reply: exactly `{ marker, reply }`, non-empty strings. The first marked
  * write-capable request without a tool result gets that text, never a call; one-shot like the hold,
  * so a later turn of the same Session is answered as usual (#760's conversation file link).
  */
-function ownedLink(value: unknown): { marker: string; reply: string } | undefined {
-  if (value === undefined) return undefined;
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    Object.keys(value).sort().join() !== 'marker,reply' ||
-    !('marker' in value) ||
-    typeof value.marker !== 'string' ||
-    value.marker === '' ||
-    !('reply' in value) ||
-    typeof value.reply !== 'string' ||
-    value.reply === ''
-  )
-    throw new Error('Invalid owned model configuration');
-  return { marker: value.marker, reply: value.reply };
-}
+const ownedLink = (value: unknown) => ownedMarked(value, 'reply');
+/**
+ * Optional nonsecret list script: exactly `{ marker, library }`, non-empty strings. A marked request
+ * offered `knowledge_base_list` lists the libraries without a tool message in its history, then
+ * that library's files after one, then gets text (#763).
+ */
+const ownedList = (value: unknown) => ownedMarked(value, 'library');
 /** Optional read-back script, absent by default. */
 const ownedReadBack = (value: unknown) => (value === undefined ? undefined : ownedBash(value));
 /** Optional rewrite scripts: a non-empty array of read-back-shaped items, each one-shot. */
@@ -137,6 +145,7 @@ const forbidden = ownedForbidden('forbidden' in config ? config.forbidden : unde
 const readBack = ownedReadBack('readBack' in config ? config.readBack : undefined);
 const rewrites = ownedRewrites('rewrites' in config ? config.rewrites : undefined);
 const link = ownedLink('link' in config ? config.link : undefined);
+const list = ownedList('list' in config ? config.list : undefined);
 /** Held answers, released together by `POST /release`; at most one request is ever held. */
 const heldAnswers: (() => void)[] = [];
 let holding = hold !== undefined;
@@ -147,6 +156,7 @@ let searches = 0;
 let readBacks = 0;
 let readBackHits = 0;
 let links = 0;
+let lists = 0;
 const rewriteCalls = rewrites?.map(() => 0) ?? [];
 const rewriteHits = rewrites?.map(() => 0) ?? [];
 let markedRequests = 0;
@@ -166,14 +176,15 @@ const offers = (tools: unknown, name: string) =>
       tool.function.name === name,
   );
 const offersWrite = (tools: unknown) => offers(tools, 'write');
-const hasToolResult = (messages: unknown[]) =>
-  messages.some(
+const toolMessages = (messages: unknown[]) =>
+  messages.filter(
     (message: unknown) =>
       typeof message === 'object' &&
       message !== null &&
       'role' in message &&
       message.role === 'tool',
-  );
+  ).length;
+const hasToolResult = (messages: unknown[]) => toolMessages(messages) > 0;
 
 /** Only a write-capable main turn without a tool result gets the call; titles get text. */
 function scriptedCall(body: object, toolResult: boolean) {
@@ -300,6 +311,27 @@ function delegatedCall(body: object, text: string, toolResult: boolean) {
   };
 }
 
+/**
+ * The list script in a fresh Session: `{}` while the history holds no tool message, then
+ * `{ library }` after one; any later request falls through to text.
+ */
+function listCall(body: object, messages: unknown[], text: string) {
+  if (list === undefined || !text.includes(list.marker)) return undefined;
+  if (!('tools' in body) || !offers(body.tools, 'knowledge_base_list')) return undefined;
+  const step = toolMessages(messages);
+  if (step > 1) return undefined;
+  lists++;
+  return {
+    index: 0,
+    id: `owned-list-${String(step + 1)}`,
+    type: 'function',
+    function: {
+      name: 'knowledge_base_list',
+      arguments: JSON.stringify(step === 0 ? {} : { library: list.library }),
+    },
+  };
+}
+
 /** The link's text, once, for the first marked write-capable request without a tool result. */
 function linkText(body: object, text: string, toolResult: boolean) {
   if (link === undefined || links > 0 || toolResult || !text.includes(link.marker))
@@ -310,15 +342,16 @@ function linkText(body: object, text: string, toolResult: boolean) {
 }
 
 /** The link first, then the read-back: their markers are in no other turn. Then the rewrites,
- * each keyed by its own marker, and the delegation, keyed by the child marker. A string answers
- * with that text. */
+ * each keyed by its own marker, the delegation, keyed by the child marker, and the list, keyed by
+ * its own. A string answers with that text. */
 function leadingCall(body: object, messages: unknown[], text: string, toolResult: boolean) {
   countRewriteHits(messages);
   return (
     linkText(body, text, toolResult) ??
     readBackCall(body, messages, text) ??
     rewriteCall(body, text) ??
-    delegatedCall(body, text, toolResult)
+    delegatedCall(body, text, toolResult) ??
+    listCall(body, messages, text)
   );
 }
 
@@ -364,8 +397,8 @@ function holds(body: object, text: string, toolResult: boolean) {
   return 'tools' in body && offersWrite(body.tools);
 }
 
-/** Health stays byte-identical unless hold, forbidden strings, delegation, read-back, rewrites or
- * the link are set. */
+/** Health stays byte-identical unless hold, forbidden strings, delegation, read-back, rewrites,
+ * the link or the list are set. */
 function health() {
   return JSON.stringify({
     ready: true,
@@ -378,6 +411,7 @@ function health() {
     ...(readBack === undefined ? {} : { readBacks, readBackHits }),
     ...(rewrites === undefined ? {} : { rewriteCalls, rewriteHits }),
     ...(link === undefined ? {} : { links }),
+    ...(list === undefined ? {} : { lists }),
   });
 }
 

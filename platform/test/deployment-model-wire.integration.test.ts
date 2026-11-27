@@ -733,3 +733,63 @@ it.each([
   expect(code).not.toBe(0);
   expect(stderr).toContain('Invalid owned model configuration');
 });
+
+const LIST = { marker: 'list-9', library: 'dsh-team-seed-policies' };
+const LIST_TOOL = { type: 'function', function: { name: 'knowledge_base_list', parameters: {} } };
+const listTurn = (tools?: unknown[], results = 0) => ({
+  ...userTurn(tools),
+  messages: [
+    { role: 'user', content: `please ${LIST.marker}` },
+    ...Array.from({ length: results }, (_, index) => [
+      { role: 'assistant', content: null, tool_calls: [{ id: `owned-list-${String(index + 1)}` }] },
+      { role: 'tool', content: 'listed', tool_call_id: `owned-list-${String(index + 1)}` },
+    ]).flat(),
+  ],
+});
+const listCall = (step: number, args: unknown) => ({
+  index: 0,
+  id: `owned-list-${String(step)}`,
+  type: 'function',
+  function: { name: 'knowledge_base_list', arguments: JSON.stringify(args) },
+});
+
+it('lists the libraries, then the library files, then replies, before the write script', async () => {
+  const origin = await start({ ...BASE, script: SCRIPT, list: LIST });
+  expect(await health(origin)).toEqual({
+    ...{ ready: true, markedRequests: 0, requests: 0, toolResults: 0, lists: 0 },
+  });
+  const tools = [WRITE_TOOL, LIST_TOOL, SEARCH_TOOL];
+  expect(await streamed(await complete(origin, listTurn(tools)))).toEqual(
+    callChunks(listCall(1, {})),
+  );
+  expect(await streamed(await complete(origin, listTurn(tools, 1)))).toEqual(
+    callChunks(listCall(2, { library: LIST.library })),
+  );
+  expect(await streamed(await complete(origin, listTurn(tools, 2)))).toEqual(replyChunks);
+  expect(await health(origin)).toMatchObject({ toolResults: 2, lists: 2 });
+});
+
+it('leaves requests without the list marker or the list tool to the script and the reply', async () => {
+  const origin = await start({ ...BASE, script: SCRIPT, list: LIST });
+  expect(await streamed(await complete(origin, listTurn()))).toEqual(replyChunks);
+  expect(await streamed(await complete(origin, listTurn([WRITE_TOOL])))).toEqual(
+    callChunks(writeCall),
+  );
+  expect(await streamed(await complete(origin, userTurn([WRITE_TOOL, LIST_TOOL])))).toEqual(
+    callChunks(writeCall),
+  );
+  expect(await health(origin)).toMatchObject({ lists: 0 });
+});
+
+it.each([
+  ['a non-object list', 'list'],
+  ['a list missing its library', { marker: LIST.marker }],
+  ['a list with an extra key', { ...LIST, page: 2 }],
+  ['a list with an empty marker', { ...LIST, marker: '' }],
+  ['a list with an empty library', { ...LIST, library: '' }],
+])('rejects %s before listening', async (_name, list) => {
+  const { closed } = await launch({ ...BASE, list }, await unusedPort());
+  const { code, stderr } = await closed;
+  expect(code).not.toBe(0);
+  expect(stderr).toContain('Invalid owned model configuration');
+});

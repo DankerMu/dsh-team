@@ -20,9 +20,9 @@ const CHILD_TITLE = '检索知识库';
 const STARTED = /^started subagent (\S+)$/;
 
 /** The calls named `name` in a history, and the native result of one call ID. */
-const callsNamed = (events: readonly HistoryEvent[], name: string) =>
+export const callsNamed = (events: readonly HistoryEvent[], name: string) =>
   events.filter((event) => event.type === 'tool/call' && dataOf(event).name === name);
-function resultOf(events: readonly HistoryEvent[], callId: unknown) {
+export function resultOf(events: readonly HistoryEvent[], callId: unknown) {
   const found = events.find(
     (event) =>
       event.type === 'tool/result' &&
