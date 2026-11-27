@@ -27,7 +27,10 @@ exit 0
 const SETTLE_MS = 10_000;
 // Reaching the marker or an exit: the settle bound plus one injected STUB_DELAY.
 const READY_MS = SETTLE_MS + DELAY_MS;
-// Exiting once held, from the SIGTERM: the TERM trap exits within milliseconds of it.
+// Exiting once held, from the SIGTERM. Measured TERM-to-exit maxima (#741), this file alone on
+// Darwin arm64 (14 cores) under bounded `yes` load: 2 ms over 3 runs at 1-minute load 13-67
+// (14.6-19.9) and 7 ms over 12 runs at load >= 67 (67.3-99.6).
+// A rare hang here is a lost SIGTERM under macOS bash 3.2 (#752), not a deadline tail.
 const EXIT_MS = 3_000;
 // Both phase bounds plus the former 5 s headroom for setup and the forced group kill.
 const CASE_TIMEOUT_MS = READY_MS + EXIT_MS + 5_000;
