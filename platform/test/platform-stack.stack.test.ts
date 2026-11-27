@@ -67,11 +67,9 @@ import {
   documentServerStarted,
   expectVolumesRetired,
   healthTimelineLine,
-  officeHintsLine,
-  officeHintsScenario,
   sampleDocumentServerHealth,
 } from './office-hints-stack-fixture.ts';
-import type { OfficeHintsEvidence } from './office-hints-stack-fixture.ts';
+import * as link from './office-link-stack-fixture.ts';
 import { officeIdleLine, officeIdleScenario } from './office-idle-stack-fixture.ts';
 import type { OfficeIdleEvidence } from './office-idle-stack-fixture.ts';
 import { officeIsolationWithForgotten } from './office-forgotten-stack-fixture.ts';
@@ -196,7 +194,7 @@ interface ConversationEvidence {
   search?: SearchEvidence & { provider: Record<string, unknown> };
   archive?: ArchiveEvidence;
   legacyPreview?: LegacyPreviewEvidence;
-  officeHints?: OfficeHintsEvidence;
+  officeHints?: link.OfficeHintsWithLink;
   officeEditor?: OfficeEditorEvidence;
   officeIsolation?: OfficeIsolationEvidence;
   officeProfile?: OfficeProfileEvidence;
@@ -281,6 +279,8 @@ function ownedModel(runId: string, seedIds: readonly { id: string }[]) {
       },
       // One bash rewrite per Agent-rewrite case (#442), each with its own marker and nonce.
       rewrites: rewrite.ownedRewrites(),
+      // #760's conversation file link, one-shot.
+      link: link.ownedLink(),
     },
   };
 }
@@ -522,8 +522,9 @@ async function converse(
     const instance = `dsh-team-u-${employee.id}`;
     // 55.3 (#624): docservice and the Command Service answer only on the holder's own loopback.
     evidence.commandService = await commandReach(run, instance);
-    // F40's hint over the mounted ONLYOFFICE editor, opened read-only (#439).
-    evidence.officeHints = await officeHintsScenario(lane);
+    // F40's hint over the mounted ONLYOFFICE editor, opened read-only (#439); then the same editor
+    // from the Agent's session-relative file link in the conversation (#760).
+    evidence.officeHints = await link.officeHintsWithLink({ ...lane, link: provider.link });
     // 18.5 (#440): A edits and saves a DOCX, an XLSX and a PPTX; the Agent's bash reads all three.
     const { reply, readBack, rewrites } = provider;
     // B starts once, for the editor's same-name DOCX, and runs until the isolation lane retires it.
@@ -899,7 +900,7 @@ it('builds both images, starts the delivered compose platform, converses through
           files: legacyPreview.files,
           screenshots: legacyPreview.browser.screenshots,
         },
-        officeHints: officeHintsLine(officeHints),
+        officeHints: link.officeHintsWithLinkLine(officeHints),
         officeEditor: officeEditorLine(officeEditor),
         officeIsolation: officeIsolationLine(officeIsolation),
         officeProfile: officeProfileLine(officeProfile),

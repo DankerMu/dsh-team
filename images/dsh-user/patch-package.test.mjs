@@ -367,7 +367,7 @@ it('applies the onlyoffice table when each original occurs exactly once', () => 
   expect(text.split('isTrustedApiRequest(req, plugin.webStartup.trustedHosts)')).toHaveLength(3);
 });
 
-it('pins exactly nine distinct onlyoffice replacements for the released lib/index.js', () => {
+it('pins exactly eleven distinct onlyoffice replacements for the released lib/index.js', () => {
   const pin = PINS.onlyoffice;
 
   const originals = pin.replacements.map(([original]) => original);
@@ -380,7 +380,7 @@ it('pins exactly nine distinct onlyoffice replacements for the released lib/inde
       {
         target: 'lib/index.js',
         inputSha256: 'e2148f01c2740c464eb39eaf6b9547f773a7b1a172039e9554e03da617d4b29b',
-        outputSha256: '30c3ffd21bda284e9daa205bd3f71ec08eeb61dfad999080608a9a81d49196ef',
+        outputSha256: '59caeb56a38e52e35a649cec6702d41d801a49aa43ab167951f84e776d6c2a78',
       },
       {
         target: 'lib/client.js',
@@ -391,8 +391,8 @@ it('pins exactly nine distinct onlyoffice replacements for the released lib/inde
   });
   expect(pin.targets).toHaveLength(2);
   expect(pin.targets[0].replacements).toBeUndefined();
-  expect(originals).toHaveLength(9);
-  expect(new Set(originals).size).toBe(9);
+  expect(originals).toHaveLength(11);
+  expect(new Set(originals).size).toBe(11);
 });
 
 // The released lib/client.js lines the client.js replacements anchor on, at their indentation.
@@ -584,6 +584,77 @@ it('keeps the released clean, same-key and removed behaviour', async () => {
   await dirty(false);
 
   expect(calls).toEqual(['fetch', 'refresh', 'clear', 'removed', 'clear']);
+});
+
+// Released lib/index.js 0.2.0, verbatim: src/paths.ts, then the config and watch routes' path
+// lines at their indentation, each route returning what its next check reads.
+const T5 = '\t\t\t\t\t';
+const ROUTE_TAIL = [
+  `${T5}const cwd = sessionCwdOf(plugin, sessionId, url.searchParams.get("cwd"));`,
+  ...[`${T5}let path;`, `${T5}try {`, `${T5}\tpath = requireAbsolute(rawPath);`, `${T5}} catch {`],
+  ...[`${T5}\treturn "path must be absolute";`, `${T5}}`],
+  `${T5}return { path, inside: isWithin(cwd, path) };\n};`,
+];
+const RELEASED_PATHS = [
+  'function requireAbsolute(raw) {\n\tconst resolved = resolve(raw);',
+  '\tif (!isAbsolute(raw)) throw new Error(`expected an absolute path, got "${raw}"`);',
+  '\treturn resolved;\n}\nfunction segments(path) {',
+  '\treturn path.split(/[\\\\/]+/).filter((segment) => segment !== "");\n}',
+  'function isWithin(parent, child) {\n\tconst parentSegments = segments(parent);',
+  '\tconst childSegments = segments(child);',
+  '\tif (parentSegments.length > childSegments.length) return false;',
+  '\treturn parentSegments.every((segment, index) => segment === childSegments[index]);\n}',
+  'const config = (rawPath) => {',
+  `${T5}const lang = editorLang(url.searchParams.get("lang") ?? void 0);`,
+  ...ROUTE_TAIL,
+  `const watch = (rawPath) => {\n${T5}if (rawPath === null) {\n${T5}\treturn;\n${T5}}`,
+  ...ROUTE_TAIL,
+].join('\n');
+
+/** Both routes over cwd `/data/work` from an owned module, with the pinned path lines or not. */
+async function loadRoutes(pinned) {
+  const base = mkdtempSync(join(tmpdir(), 'dsh-team-patch-package-routes-'));
+  owned.push(base);
+  let text = RELEASED_PATHS;
+  const lines = PINS.onlyoffice.replacements.filter(([original]) =>
+    original.includes('(rawPath);'),
+  );
+  for (const [original, replacement] of pinned ? lines : []) {
+    expect(text.split(original)).toHaveLength(2);
+    text = text.replace(original, () => replacement);
+  }
+  const module = join(base, 'routes.mjs');
+  writeFileSync(
+    module,
+    "import { isAbsolute, join, resolve } from 'node:path';\nconst url = new URL('http://x/');\n" +
+      'const [plugin, sessionId, editorLang] = [{}, "t", () => "zh"];\n' +
+      `const sessionCwdOf = () => "/data/work";\n${text}\nexport { config, watch };\n`,
+  );
+  return import(pathToFileURL(module).href);
+}
+
+// What isWithin then reads per path: resolved under the cwd when relative, as released otherwise.
+const SESSION_PATHS = [
+  ['报告.docx', { path: '/data/work/报告.docx', inside: true }],
+  ['sub/../报告.docx', { path: '/data/work/报告.docx', inside: true }],
+  ['../x.docx', { path: '/data/x.docx', inside: false }],
+  ['/data/work/a.docx', { path: '/data/work/a.docx', inside: true }],
+  ['/etc/a.docx', { path: '/etc/a.docx', inside: false }],
+  ['/data/work/../etc/a.docx', { path: '/data/etc/a.docx', inside: false }],
+  ['', { path: '/data/work', inside: true }],
+];
+
+it.each(['config', 'watch'])('resolves a session-relative %s path under the cwd', async (route) => {
+  const routes = await loadRoutes(true);
+
+  expect(SESSION_PATHS.map(([path]) => [path, routes[route](path)])).toEqual(SESSION_PATHS);
+});
+
+it('keeps the released 400 for a relative path without the pinned lines', async () => {
+  const { config, watch } = await loadRoutes(false);
+
+  expect([config('报告.docx'), watch('')]).toEqual(Array(2).fill('path must be absolute'));
+  expect(config('/data/work/a.docx')).toEqual({ path: '/data/work/a.docx', inside: true });
 });
 
 const SIDEBAR_ANCHOR = 'return file !== void 0 && !hostOwnedPath(file.path);';

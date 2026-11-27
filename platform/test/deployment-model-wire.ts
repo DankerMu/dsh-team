@@ -101,6 +101,27 @@ function ownedBash(value: unknown): { marker: string; command: string; nonce: st
     throw new Error('Invalid owned model configuration');
   return { marker: value.marker, command: value.command, nonce: value.nonce };
 }
+/**
+ * Optional nonsecret text reply: exactly `{ marker, reply }`, non-empty strings. The first marked
+ * write-capable request without a tool result gets that text, never a call; one-shot like the hold,
+ * so a later turn of the same Session is answered as usual (#760's conversation file link).
+ */
+function ownedLink(value: unknown): { marker: string; reply: string } | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Object.keys(value).sort().join() !== 'marker,reply' ||
+    !('marker' in value) ||
+    typeof value.marker !== 'string' ||
+    value.marker === '' ||
+    !('reply' in value) ||
+    typeof value.reply !== 'string' ||
+    value.reply === ''
+  )
+    throw new Error('Invalid owned model configuration');
+  return { marker: value.marker, reply: value.reply };
+}
 /** Optional read-back script, absent by default. */
 const ownedReadBack = (value: unknown) => (value === undefined ? undefined : ownedBash(value));
 /** Optional rewrite scripts: a non-empty array of read-back-shaped items, each one-shot. */
@@ -115,6 +136,7 @@ const delegation = ownedDelegation('delegation' in config ? config.delegation : 
 const forbidden = ownedForbidden('forbidden' in config ? config.forbidden : undefined);
 const readBack = ownedReadBack('readBack' in config ? config.readBack : undefined);
 const rewrites = ownedRewrites('rewrites' in config ? config.rewrites : undefined);
+const link = ownedLink('link' in config ? config.link : undefined);
 /** Held answers, released together by `POST /release`; at most one request is ever held. */
 const heldAnswers: (() => void)[] = [];
 let holding = hold !== undefined;
@@ -124,6 +146,7 @@ let delegations = 0;
 let searches = 0;
 let readBacks = 0;
 let readBackHits = 0;
+let links = 0;
 const rewriteCalls = rewrites?.map(() => 0) ?? [];
 const rewriteHits = rewrites?.map(() => 0) ?? [];
 let markedRequests = 0;
@@ -277,24 +300,37 @@ function delegatedCall(body: object, text: string, toolResult: boolean) {
   };
 }
 
-/** Read-back first: its marker is in no other turn. Then the rewrites, each keyed by its own
- * marker, and the delegation, keyed by the child marker. */
+/** The link's text, once, for the first marked write-capable request without a tool result. */
+function linkText(body: object, text: string, toolResult: boolean) {
+  if (link === undefined || links > 0 || toolResult || !text.includes(link.marker))
+    return undefined;
+  if (!('tools' in body) || !offersWrite(body.tools)) return undefined;
+  links++;
+  return link.reply;
+}
+
+/** The link first, then the read-back: their markers are in no other turn. Then the rewrites,
+ * each keyed by its own marker, and the delegation, keyed by the child marker. A string answers
+ * with that text. */
 function leadingCall(body: object, messages: unknown[], text: string, toolResult: boolean) {
   countRewriteHits(messages);
   return (
+    linkText(body, text, toolResult) ??
     readBackCall(body, messages, text) ??
     rewriteCall(body, text) ??
     delegatedCall(body, text, toolResult)
   );
 }
 
-function respond(response: ServerResponse, stream: boolean, call: object | undefined) {
+function respond(response: ServerResponse, stream: boolean, answer: object | string | undefined) {
+  const call = typeof answer === 'object' ? answer : undefined;
+  const content = typeof answer === 'string' ? answer : reply;
   const common = { id: 'owned-completion', created: 1, model };
   if (stream) {
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     for (const choice of [
       call === undefined
-        ? { index: 0, delta: { role: 'assistant', content: reply }, finish_reason: null }
+        ? { index: 0, delta: { role: 'assistant', content }, finish_reason: null }
         : { index: 0, delta: { role: 'assistant', tool_calls: [call] }, finish_reason: null },
       { index: 0, delta: {}, finish_reason: call === undefined ? 'stop' : 'tool_calls' },
     ])
@@ -311,7 +347,7 @@ function respond(response: ServerResponse, stream: boolean, call: object | undef
       object: 'chat.completion',
       choices: [
         call === undefined
-          ? { index: 0, message: { role: 'assistant', content: reply }, finish_reason: 'stop' }
+          ? { index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }
           : {
               index: 0,
               message: { role: 'assistant', content: null, tool_calls: [call] },
@@ -328,8 +364,8 @@ function holds(body: object, text: string, toolResult: boolean) {
   return 'tools' in body && offersWrite(body.tools);
 }
 
-/** Health stays byte-identical unless hold, forbidden strings, delegation, read-back or rewrites
- * are set. */
+/** Health stays byte-identical unless hold, forbidden strings, delegation, read-back, rewrites or
+ * the link are set. */
 function health() {
   return JSON.stringify({
     ready: true,
@@ -341,6 +377,7 @@ function health() {
     ...(delegation === undefined ? {} : { delegations, searches }),
     ...(readBack === undefined ? {} : { readBacks, readBackHits }),
     ...(rewrites === undefined ? {} : { rewriteCalls, rewriteHits }),
+    ...(link === undefined ? {} : { links }),
   });
 }
 

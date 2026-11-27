@@ -469,11 +469,11 @@ process.stdout.write(JSON.stringify({immutable:true,engines,credentials:entry?.n
 // e2148f01…b29b) and lib/client.js (published 13df10ce…0cbc); its manifest only gains
 // `bundleDependencies`.
 const ONLYOFFICE_PATCHED_INDEX_SHA256 =
-  '30c3ffd21bda284e9daa205bd3f71ec08eeb61dfad999080608a9a81d49196ef';
+  '59caeb56a38e52e35a649cec6702d41d801a49aa43ab167951f84e776d6c2a78';
 const ONLYOFFICE_PATCHED_CLIENT_SHA256 =
   'ada60b402c53807580111a3c833d65574a37ef09f7acf08494b0e5896dafd246';
 
-it('delivers dsh-sidebar-onlyoffice 0.2.0 with only the file-token and refresh code patches and bundleDependencies, root-owned and unwritable by uid1001, without the patch script', async () => {
+it('delivers dsh-sidebar-onlyoffice 0.2.0 with only the file-token, session-path and refresh code patches and bundleDependencies, root-owned and unwritable by uid1001, without the patch script', async () => {
   if (platform() !== 'linux' || arch() !== 'x64') {
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   }

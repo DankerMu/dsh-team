@@ -141,9 +141,15 @@ export default defineConfig({
           // Their 540s each of helper rows (openHinted, the unsaved typing and the save typing at
           // 180s) are in the #716 table, and their masked session's 60s in the #717 line: 1645s
           // per case in all.
+          // The office link lane (#760) raised it by 1050s: five 30s execs (two provider reads, the
+          // write, the read-back, the removal), documentServerReady's 60s plus its last 30s exec,
+          // the conversation's six 60s waits (login, composer, turn start, provider turn, reply,
+          // turn end), its seven actions at Playwright's 30s default (the login page, the login
+          // click, the focus, the send and three screenshots) and openHinted's 240s (#716 table;
+          // the link button's wait stands for its row).
           // Sum: 2400 + 600 + 480 + 600 + 300 + 180 + 60 + 660 + 30 + 420 + 1500 + 960 + 870 +
-          // 870 + 150 + 1970 + 6355 + 480 + 15 + 2090 = 20990s, the 1200s of cold builds plus
-          // 19790s for everything else. Outside the opening and typing helpers, which it counts at
+          // 870 + 150 + 1970 + 6355 + 480 + 15 + 2090 + 1050 = 22040s, the 1200s of cold builds
+          // plus 20840s for the rest. Outside the opening and typing helpers, which it counts at
           // every bound, that remainder is a margin, not the sum of every per-step bound: a vitest
           // timeout skips the restore `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5),
           // and a stalled helper wait fails with its own label first. A poll bounded by a deadline
@@ -151,7 +157,7 @@ export default defineConfig({
           // by that last exec; the margin covers that too. The four rewrite lines (#442, #652,
           // #657 A4, #716 item 4) still count the Document Server healthcheck wait at its 60s
           // deadline only, in the older deadline-only notation.
-          testTimeout: 20_990_000,
+          testTimeout: 22_040_000,
         },
       },
     ],

@@ -92,6 +92,8 @@ export interface StackConversation extends StackSession {
   readonly reply: string;
   /** Resolves once the provider has served the whole turn; the transcript checks follow it. */
   readonly turnComplete: () => Promise<void>;
+  /** Drives the page after the reply screenshot, inside the same observed session. */
+  readonly after?: (page: Page, shoot: (name: string) => Promise<void>) => Promise<void>;
 }
 
 /** What a session names in its messages and screenshots. */
@@ -468,6 +470,7 @@ export function converseInWorkbench(
         'turn end',
       );
       await shoot('reply');
+      await conversation.after?.(page, shoot);
     },
     launch,
   );
