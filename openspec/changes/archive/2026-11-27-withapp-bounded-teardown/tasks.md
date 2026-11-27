@@ -27,7 +27,7 @@ Write each probe first and record its red output, then change the code.
 
 - [x] 2.1 Touched files, then `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code`, `pnpm duplicate-code`, `pnpm lint:tests`: exit 0.
 - [x] 2.2 5 consecutive full `pnpm test:integration` runs and 2 full `pnpm test` runs at 1-minute load ≥ 13 and < 67 (bounded `yes` generators, confirmed gone afterwards): all pass.
-- [ ] 2.3 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
+- [x] 2.3 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
 
 ## Acceptance mapping (#736)
 

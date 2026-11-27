@@ -23,4 +23,4 @@ Write each row first and record its red output, then change the code.
 ## 2. Verification
 
 - [x] 2.1 `pnpm exec vitest run --project integration platform/test/trusted-docker-uncaptured-fixture.integration.test.ts`, `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code`, `pnpm duplicate-code`: exit 0.
-- [ ] 2.2 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
+- [x] 2.2 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.

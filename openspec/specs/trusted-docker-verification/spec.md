@@ -255,11 +255,11 @@ Trusted custody integration regressions SHALL wait for owned process readiness o
 
 ### Requirement: Observer create-deadline failures retain attributable timing evidence
 
-When the compiled observer child's non-stalling create request fails within its deadline, the verification failure SHALL report, alongside the unchanged assertion, a diagnostic containing: the child's call, request-issued and failure times; the engine fixture's create receipt, body-end, response-finish and response-close times; the engine's persisted and dispatched state and recorded request methods and paths; the worker's maximum event-loop delay over the scenario; and bounded child stdout and stderr. All times SHALL come from the host's system-wide monotonic clock so that child and engine values are comparable, and the child timing SHALL be reported as its own field rather than only inside truncated output. Successful runs SHALL add no child output. The create deadline, the stalling case's real cancellation, request ordering and every assertion SHALL remain unchanged, and the evidence SHALL NOT claim a cause.
+When the compiled observer child's non-stalling create request fails within its deadline, the verification failure SHALL report, alongside the unchanged assertion, a diagnostic containing: the child's call, request-issued and failure times; the engine fixture's create receipt, body-end, response-finish and response-close times; the engine's persisted and dispatched state and recorded request methods and paths; the worker's maximum event-loop delay over the scenario; and bounded child stdout and stderr. All times SHALL come from the host's system-wide monotonic clock so that child and engine values are comparable, and the child timing SHALL be reported as its own field rather than only inside truncated output. Successful runs SHALL add no child output. The non-stalling create's deadline SHALL be the scenario's ordinary 2000 ms request deadline: that case does not test cancellation, and a short deadline already runs during the synchronous submission work before the request is sent (#746: 212 ms). The stalling case SHALL keep its 200 ms deadline and real cancellation. When the stalling case fails, including after an abort before the engine received its create, the same diagnostic SHALL carry the child's call, request-issued and failure times. A passing stalling case SHALL add no child output. Request ordering and every assertion SHALL remain unchanged, and the evidence SHALL NOT claim a cause.
 
 #### Scenario: Create aborted after the engine received it
 
-- **WHEN** the non-stalling child source runs against an engine that receives the create but never completes its response, so the real 200ms abort fires
+- **WHEN** the non-stalling child source runs against an engine that receives the create but never completes its response, so the real 2000ms abort fires
 - **THEN** the failure diagnostic contains a parsed child timing with `called <= issued <= settled`, an engine `received` time, `persisted: true`, a dispatched state, `responseClosed` recorded and `responseFinished` null
 
 #### Scenario: Engine never received the create
@@ -271,6 +271,16 @@ When the compiled observer child's non-stalling create request fails within its 
 
 - **WHEN** the create succeeds, or the stalling case is cancelled as designed
 - **THEN** child stderr stays empty and stdout, requests and cleanup assertions are unchanged
+
+#### Scenario: Slow synchronous submission in a non-stalling case
+
+- **WHEN** the synchronous work between the creation of the non-stalling create's deadline and the request write takes longer than 200 ms
+- **THEN** the create still reaches the engine and the case passes with its unchanged criteria
+
+#### Scenario: The stalling case aborts before the request is sent
+
+- **WHEN** the stalling case's 200 ms create deadline fires before the engine receives the create
+- **THEN** the failure diagnostic contains a parsed child timing with `called <= issued <= settled` and an engine `received` of null
 
 ### Requirement: Unresolved submissions identify their operation and test without sensitive detail
 
@@ -334,7 +344,7 @@ When the cleanup assessment is unconfirmed because one or more submissions remai
 
 ### Requirement: Documentation-only diffs are classified exactly
 
-The docker-evidence CI job MUST exempt a diff from trusted Docker evidence only when the diff is non-empty and every changed path (`git diff -z --no-renames --name-only`, NUL-delimited and byte-exact, for both the PR range and the main-push range) is either Markdown outside `plugins/` and `images/`, or exactly the OpenSpec change metadata file `.openspec.yaml` directly inside `openspec/changes/<change>/` or `openspec/changes/archive/YYYY-MM-DD-<change>/`, with the date and name grammar taken from `constraints.yaml` `managed_archive_pattern`. Any other path, any path under `plugins/` or `images/`, an empty diff, an unreadable range and an unreadable classifier configuration MUST keep the evidence requirement or fail the job; none of them may produce a documentation-only verdict. Path-derived text the job prints MUST NOT be interpretable as a workflow command, so a crafted file name cannot set the job's outputs.
+The docker-evidence CI job MUST exempt a diff from trusted Docker evidence only when the diff is non-empty and every changed path (`git diff -z --no-renames --name-only`, NUL-delimited and byte-exact, for both the PR range and the main-push range) is either Markdown outside `plugins/` and `images/`, or exactly the OpenSpec change metadata file `.openspec.yaml` directly inside `openspec/changes/<change>/` or `openspec/changes/archive/YYYY-MM-DD-<change>/`, with the date and name grammar taken from `constraints.yaml` `managed_archive_pattern`. Any other path, any path under `plugins/` or `images/`, an empty diff, an unreadable range and an unreadable classifier configuration MUST keep the evidence requirement or fail the job; none of them may produce a documentation-only verdict. Path-derived text the job prints MUST NOT be interpretable as a workflow command, so a crafted file name cannot set the job's outputs. On `pull_request` events the PR range MUST be the merge ref's own range, from the merge-base of its base tip and the pull request head to that head, never a range starting at the event payload's base SHA, and a merge ref that is not a two-parent merge, or whose parents have more than one merge base, MUST fail the job. On `push` events the range stays `before..after`.
 
 #### Scenario: OpenSpec archive with change metadata is documentation-only
 
@@ -365,6 +375,21 @@ The docker-evidence CI job MUST exempt a diff from trusted Docker evidence only 
 
 - **WHEN** a diff changes `docs/a.md`, `platform/x.ts` and `z.md`
 - **THEN** the classifier names `platform/x.ts` and the job requires trusted Docker evidence
+
+#### Scenario: Stale payload base and a documentation-only pull request
+
+- **WHEN** the base gained a code file after the payload's base SHA and the pull request changes only `docs/a.md`
+- **THEN** the job reports a documentation-only change
+
+#### Scenario: Pull request checkout is not a merge ref
+
+- **WHEN** a `pull_request` run's `HEAD` has no second parent
+- **THEN** the job fails and no documentation-only verdict is produced
+
+#### Scenario: Several merge bases
+
+- **WHEN** a `pull_request` run's merge ref parents have two merge bases
+- **THEN** the job fails and no documentation-only verdict is produced
 
 ### Requirement: A rejected observer reservation leaves submission pending markers unchanged
 
@@ -398,7 +423,7 @@ While the owner is frozen, cleanup SHALL bind the identity of the command the ow
 
 Cleanup SHALL then retire the owner, and SHALL retire the command's group after the owner. It SHALL NOT leave the owner stopped, except when the owner's identity can no longer be confirmed after its retirement failed. In that case it SHALL NOT signal the unconfirmed pid, and SHALL report the retirement failure.
 
-Cleanup SHALL report the command it bound, or that no command was started. In-flight, ambiguous or failed identification, and an owner already gone with no command receipt, SHALL keep the authority and SHALL NOT be reported as absence. The one exception is an owner already gone whose validated `result.json` records a settled command: cleanup SHALL claim it as a finished command, report `command finished`, and hand back the authority.
+Cleanup SHALL report the command it bound, or that no command was started. In-flight, ambiguous or failed identification, and an owner already gone with no command receipt, SHALL keep the authority and SHALL NOT be reported as absence. The exceptions are an owner already gone, and a frozen owner whose completed scan finds no command and no in-flight or ambiguous child, when its validated `result.json` records a settled command: cleanup SHALL claim it as a finished command, report `command finished`, and hand back the authority.
 
 #### Scenario: Owner killed after starting its command but before publishing it
 
@@ -408,7 +433,7 @@ Cleanup SHALL report the command it bound, or that no command was started. In-fl
 
 #### Scenario: No command was started
 
-- **WHEN** the frozen, identity-bound owner has no started or in-flight command
+- **WHEN** the frozen, identity-bound owner has no started or in-flight command and no valid `result.json` records a settled command
 - **THEN** cleanup retires the owner and reports that no command was started
 
 #### Scenario: Identification is uncertain
@@ -468,6 +493,8 @@ A captured start whose identity wait itself ends on `result.json` with no comman
 
 When the owner has exited without a `child.json` receipt, its `result.json` — validated against this invocation's id and manifest digest — records a settled command (`command.settled` true) and cleanup reaches that check only after confirming the owner gone and finding no command receipt, cleanup SHALL claim the invocation as a finished command: it SHALL hand back the authority, report `command finished`, delete the invocation's temporary root, and add no "authority retained" failure. A `result.json` that is missing, unreadable, invalid, or records an unsettled command SHALL keep the authority retained exactly as before.
 
+When the owner is still alive and frozen, no `child.json` receipt exists and the scan of its children completes with no command and no in-flight or ambiguous child (at most helpers inside the owner's own process group), cleanup SHALL read the same validated `result.json`. A scan that fails, does not list the owner, finds an ambiguous or still in-flight child, or cannot observe the command SHALL keep the command unidentified with the authority retained, whatever `result.json` says. If that `result.json` records a settled command, cleanup SHALL claim the invocation as a finished command exactly as for an exited owner. Otherwise cleanup SHALL report that no command started, as before. A command that the scan finds SHALL stay bound by pid whatever `result.json` says.
+
 #### Scenario: The owner started a command but never published it
 
 - **WHEN** a captured start's identity wait expires after its owner spawned the command
@@ -488,6 +515,26 @@ When the owner has exited without a `child.json` receipt, its `result.json` — 
 
 - **WHEN** the owner exits without `child.json` and its `result.json` records an unsettled command, or does not validate for this invocation
 - **THEN** the authority stays retained with the report `command unidentified (owner gone without receipt)`
+
+#### Scenario: A live owner already wrote a settled result
+
+- **WHEN** cleanup freezes an owner that is still alive, has no `child.json`, whose completed scan finds no command and no in-flight or ambiguous child, and that has written a valid `result.json` with a settled command
+- **THEN** cleanup reports `command finished`, hands back the authority and adds no "authority retained" failure
+
+#### Scenario: A live owner with a settled result still has a command
+
+- **WHEN** the frozen owner's scan finds a command although its `result.json` records a settled command
+- **THEN** cleanup binds that command by pid and reports it
+
+#### Scenario: A live owner without a settled result reports no command
+
+- **WHEN** the frozen owner has no `child.json`, its completed scan finds no command and no in-flight or ambiguous child, and its `result.json` is missing, invalid for this invocation, or records an unsettled command
+- **THEN** cleanup reports that no command started, as before
+
+#### Scenario: An uncertain scan of a live owner keeps the authority
+
+- **WHEN** the frozen owner's scan finds an ambiguous child although its `result.json` records a settled command
+- **THEN** the command stays unidentified and the authority is retained
 
 ### Requirement: Custody verification fixtures stay within the file size gate by responsibility
 

@@ -19,7 +19,7 @@
 
 - [x] 2.1 `pnpm exec vitest run --project integration platform/test/document-server-net-script.integration.test.ts`, `pnpm lint`, `pnpm typecheck`: exit 0.
 - [ ] 2.2 Only if `EXIT_MS` changed: 5 consecutive full `pnpm test:integration` runs, each started at load ≥ 13 and < 67, all passing.
-- [ ] 2.3 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
+- [x] 2.3 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`.
 
 ## Acceptance mapping (#741)
 

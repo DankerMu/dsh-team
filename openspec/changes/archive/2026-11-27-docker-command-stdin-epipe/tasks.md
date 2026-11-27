@@ -35,4 +35,4 @@ Write each case first and record its red output, then change the code.
 - [x] 2.2 `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code`, `pnpm duplicate-code`, `pnpm lint:deps`, `pnpm lint:tests`: exit 0.
 - [x] 2.3 One local `pnpm test:stack` on the final head (`holderRead` is its only real caller with input).
 - [x] 2.4 CI `layer3-integration` (Linux) green on the PR head: Linux evidence for 1.2 and the `localScript` 8 MB case.
-- [ ] 2.5 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy` (Docker evidence gate).
+- [x] 2.5 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy` (Docker evidence gate).
