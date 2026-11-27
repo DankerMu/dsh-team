@@ -476,12 +476,34 @@ describe('knowledge_base_list texts and meta', () => {
   });
 
   it('shows names only: no ID, token, address or scope text in a real answer', async () => {
-    proxy();
     const w = instance();
     const root = w.root('root', [A.id, B.id]);
-    const values = [await w.list(root), await w.list(root, { library: A.name })];
-    const rendered = JSON.stringify(values.map((value) => shown(w.tool, value)));
+    const none = { result: 'ok', total: 0, documents: [] };
+    const answers = [
+      [undefined, {}],
+      [undefined, { library: A.name }],
+      [none, { library: A.name }],
+      [none, { library: A.name, keywords: 'expense' }],
+      [
+        { ...none, total: 3 },
+        { library: A.name, page: 4 },
+      ],
+      [{ result: 'ok', total: 45, documents: FILES }, { library: A.name }],
+    ];
+    const outputs = [];
+    for (const [documents, args] of answers) {
+      proxy({ documents });
+      const value = await w.list(root, args);
+      expect(value.result).toBe('ok');
+      outputs.push(shown(w.tool, value, args));
+    }
+    const titles = outputs.map(({ meta }) => meta.title);
+    const rendered = JSON.stringify(outputs);
 
+    // Libraries, a page, an empty library, no match, past the end, and a next-page hint.
+    expect(new Set(titles).size).toBe(answers.length);
+    expect(titles[3]).toContain('expense');
+    expect(outputs[5].text[0].text.split('\n').at(-1)).toContain('page=2');
     expect(rendered).toContain(FILES[0].name);
     expect(rendered).not.toMatch(ID);
     for (const secret of [TOKEN, ADDRESS, ...FORBIDDEN]) expect(rendered).not.toContain(secret);

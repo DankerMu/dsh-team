@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { expect } from 'vitest';
 import { SEED_DATASETS } from '../../scripts/seed-stack.mjs';
 import { scopeSession } from './knowledge-scope-stack-fixture.ts';
-import type { ScopeDriver } from './knowledge-scope-stack-fixture.ts';
+import type { ScopeSelection } from './knowledge-scope-stack-fixture.ts';
 import { callsNamed, resultOf, searchScenario } from './knowledge-search-stack-fixture.ts';
 import type {
   SearchEvidence,
@@ -108,6 +108,18 @@ export function listEvidence(
 }
 
 type ListedSearchScenario = SearchScenario & { readonly list: OwnedList };
+type ListScenario = Pick<ListedSearchScenario, 'rpc' | 'policies' | 'ids' | 'list'>;
+
+/** The scope driver calls the list step makes; the scope lane's driver is one. */
+export interface ListDriver {
+  newSession(known: ReadonlySet<string>): Promise<string>;
+  command(id: string, line: string, selection: ScopeSelection): Promise<unknown>;
+  expectScope(id: string, selection: ScopeSelection): Promise<unknown>;
+  open(): Promise<{ readonly list: { readonly checked: readonly string[] } | null }>;
+  close(): Promise<unknown>;
+  send(id: string, text: string): Promise<number>;
+  turnEnd(id: string, turn: number): Promise<unknown>;
+}
 
 interface ListEvidence {
   readonly browser: StackBrowserEvidence;
@@ -116,8 +128,8 @@ interface ListEvidence {
 
 /** One marked turn in Session `id`: the provider lists, then lists the policies library's files. */
 async function listedTurn(
-  scope: ScopeDriver,
-  scenario: ListedSearchScenario,
+  scope: ListDriver,
+  scenario: ListScenario,
   id: string,
   kind: ListStep['scope'],
 ) {
@@ -127,25 +139,32 @@ async function listedTurn(
 }
 
 /**
- * The list step (#763) on two new root Sessions: one scoped to the policies library, one on the
- * whole scope. Each turn calls `knowledge_base_list` without a library, then for the policies
- * library; the page shows no error and contacts no external origin.
+ * The list step's script on two new root Sessions: one scoped to the policies library, one on
+ * the whole scope. Each turn calls `knowledge_base_list` without a library, then for the policies
+ * library.
+ */
+export async function listSteps(scope: ListDriver, scenario: ListScenario): Promise<ListStep[]> {
+  const selection = [scenario.policies.id];
+  const scoped = await scope.newSession(new Set());
+  await scope.command(scoped, `/kb-scope ${JSON.stringify({ datasetIds: selection })}`, selection);
+  await scope.expectScope(scoped, selection);
+  // The popover's list is the route answer the session's resource scan requires.
+  expect((await scope.open()).list?.checked).toEqual(selection);
+  await scope.close();
+  const policies = await listedTurn(scope, scenario, scoped, 'policies');
+  const whole = await scope.newSession(new Set([scoped]));
+  await scope.expectScope(whole, null);
+  return [policies, await listedTurn(scope, scenario, whole, 'whole')];
+}
+
+/**
+ * The list step (#763) in one observed session; the page shows no error and contacts no external
+ * origin.
  */
 async function listScenario(scenario: ListedSearchScenario): Promise<ListEvidence> {
   const steps: ListStep[] = [];
-  const selection = [scenario.policies.id];
   const browser = await scopeSession(scenario, 'list', async (scope, _page, tools) => {
-    const scoped = await scope.newSession(new Set());
-    await scope.command(
-      scoped,
-      `/kb-scope ${JSON.stringify({ datasetIds: selection })}`,
-      selection,
-    );
-    await scope.expectScope(scoped, selection);
-    steps.push(await listedTurn(scope, scenario, scoped, 'policies'));
-    const whole = await scope.newSession(new Set([scoped]));
-    await scope.expectScope(whole, null);
-    steps.push(await listedTurn(scope, scenario, whole, 'whole'));
+    steps.push(...(await listSteps(scope, scenario)));
     await tools.shoot(SCREENSHOT);
   });
   expect({

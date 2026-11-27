@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { listEvidence, listResultsOf, ownedList } from './knowledge-list-stack-fixture.ts';
+import {
+  listEvidence,
+  listResultsOf,
+  listSteps,
+  ownedList,
+} from './knowledge-list-stack-fixture.ts';
+import type { ListDriver } from './knowledge-list-stack-fixture.ts';
 
 const POLICIES = 'dsh-team-seed-policies';
 const SEEDS = [POLICIES, 'dsh-team-seed-products', 'dsh-team-seed-minutes'];
@@ -134,5 +140,95 @@ describe('listEvidence', () => {
       expect(failure).toBe('List policies result not a clean ok (calls=2 ok,ok)');
       expect(failure).not.toContain(POLICIES_ID);
     }
+  });
+});
+
+describe('listSteps', () => {
+  const list = ownedList();
+  const events = (libraries: string[]) =>
+    [listed(libraries), paged()].flatMap(({ text, meta }, index) => [
+      {
+        seq: 2 * index,
+        type: 'tool/call',
+        data: { callId: `c${String(index)}`, name: 'knowledge_base_list' },
+      },
+      {
+        seq: 2 * index + 1,
+        type: 'tool/result',
+        data: {
+          message: {
+            toolCallId: `c${String(index)}`,
+            content: [{ type: 'text', text }],
+            isError: false,
+          },
+          meta,
+        },
+      },
+    ]);
+  const history: Record<string, unknown[]> = {
+    scoped: events([POLICIES]),
+    whole: events(['本地其他库', ...SEEDS]),
+  };
+  const scenario = {
+    // The released projection/page RPC: one complete page per Session.
+    rpc: (method: string, args: unknown) => {
+      const { request } = args as {
+        request: { sessionId?: string; address?: { sessionId: string } };
+      };
+      const id = request.sessionId ?? request.address?.sessionId ?? '';
+      return Promise.resolve(
+        method === 'session/projections'
+          ? { asOfSeq: 3 }
+          : { records: (history[id] ?? []).map((event) => ({ event })), hasMore: false },
+      );
+    },
+    policies: { id: POLICIES_ID, name: POLICIES },
+    ids: IDS,
+    list,
+  };
+  /** A recording driver whose open popover shows `checked`. */
+  const driver = (checked: readonly string[]) => {
+    const calls: string[] = [];
+    const sessions = ['scoped', 'whole'];
+    const scope: ListDriver = {
+      newSession: () => Promise.resolve(sessions.shift() ?? 'extra'),
+      command: (id, line, selection) =>
+        Promise.resolve(calls.push(`command ${id} ${line} ${JSON.stringify(selection)}`)),
+      expectScope: (id, selection) =>
+        Promise.resolve(calls.push(`scope ${id} ${JSON.stringify(selection)}`)),
+      open: () => Promise.resolve({ list: (calls.push('open'), { checked }) }),
+      close: () => Promise.resolve(calls.push('close')),
+      send: (id, text) => Promise.resolve(calls.push(`send ${id} ${text}`)),
+      turnEnd: (id) => Promise.resolve(calls.push(`end ${id}`)),
+    };
+    return { calls, scope };
+  };
+
+  it('checks the scoped popover before the scoped turn, then lists in both Sessions', async () => {
+    const { calls, scope } = driver([POLICIES_ID]);
+    const selection = JSON.stringify([POLICIES_ID]);
+
+    expect((await listSteps(scope, scenario)).map(({ scope: kind }) => kind)).toEqual([
+      'policies',
+      'whole',
+    ]);
+    expect(calls).toEqual([
+      `command scoped /kb-scope {"datasetIds":${selection}} ${selection}`,
+      `scope scoped ${selection}`,
+      'open',
+      'close',
+      `send scoped ${list.marker} 知识库里有哪些文件`,
+      'end scoped',
+      'scope whole null',
+      `send whole ${list.marker} 知识库里有哪些文件`,
+      'end whole',
+    ]);
+  });
+
+  it('fails before any turn when the popover does not show the scoped library checked', async () => {
+    const { calls, scope } = driver([]);
+
+    await expect(listSteps(scope, scenario)).rejects.toThrow();
+    expect(calls.some((call) => call.startsWith('send'))).toBe(false);
   });
 });
