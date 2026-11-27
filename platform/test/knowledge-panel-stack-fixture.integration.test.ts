@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import type { AsyncDockerCommand, DockerCommandResult } from './docker-command.ts';
 import {
   expectNoPanelSecrets,
+  expectPanelEvidence,
   panelNeedles,
   panelSnapshot,
   panelStep,
@@ -11,10 +12,13 @@ import {
 } from './knowledge-panel-stack-fixture.ts';
 import type {
   PanelNeedles,
+  PanelSessionEvidence,
   PanelSnapshot,
+  PanelStep,
   ResourceScan,
   ScannedResponse,
 } from './knowledge-panel-stack-fixture.ts';
+import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 
 const LISTED: PanelSnapshot = {
   loading: 0,
@@ -213,6 +217,11 @@ it.each([
     response('/api/knowledge-base.documents?page=1', 'application/json', ''),
     'panel-route',
   ],
+  [
+    'the chunks route',
+    response('/api/knowledge-base.chunks?page=1', 'application/json', ''),
+    'panel-route',
+  ],
   ['a platform page', response('/_platform/login', 'text/html', ''), undefined],
   ['a platform script', response('/_platform/assets/a.js', 'text/javascript', ''), undefined],
   ['the event stream', response('/plugins/events', 'text/event-stream', ''), undefined],
@@ -352,4 +361,180 @@ it('reports a needle in a panel route answer whatever its status', async () => {
   const settled = await scan.settle();
   expect(settled.matches).toEqual(['instanceToken /api/knowledge-base.documents']);
   expect(settled.panelRoutes).toBe(2);
+});
+
+const PREVIEWED: PanelSnapshot = {
+  ...LISTED,
+  preview: { state: 'list', name: 'expense-policy.txt', chunks: ['一、费用报销。', '二、报销。'] },
+};
+
+it('accepts a snapshot with an open preview and records the preview state as the step state', () => {
+  expect(panelSnapshot(PREVIEWED)).toEqual(PREVIEWED);
+  const failed: PanelSnapshot = { ...LISTED, preview: { state: 'failed', name: 'a', chunks: [] } };
+  expect(panelStep('preview-unavailable', failed, 'kb-preview-unavailable')).toEqual({
+    step: 'preview-unavailable',
+    state: 'failed',
+    datasets: 1,
+    files: 1,
+    screenshot: 'kb-preview-unavailable.png',
+  });
+});
+
+it.each([
+  ['a null preview', { ...LISTED, preview: null }],
+  ['an unknown preview state', { ...LISTED, preview: { state: 'open', name: 'a', chunks: [] } }],
+  ['a non-string preview name', { ...LISTED, preview: { state: 'list', name: 1, chunks: [] } }],
+  ['non-string chunks', { ...LISTED, preview: { state: 'list', name: 'a', chunks: [1] } }],
+])('rejects a snapshot with %s', (_label, value) => {
+  expect(() => panelSnapshot(value)).toThrow('Knowledge panel snapshot malformed');
+});
+
+it('waits for a loading preview like any other region', async () => {
+  const loading: PanelSnapshot = {
+    ...LISTED,
+    loading: 1,
+    preview: { state: 'loading', name: 'a', chunks: [] },
+  };
+  const observed = [loading, PREVIEWED];
+  let reads = 0;
+
+  await expect(
+    settledPanel(() => Promise.resolve(observed[reads++] ?? PREVIEWED), 5_000),
+  ).resolves.toEqual(PREVIEWED);
+  expect(reads).toBe(2);
+});
+
+const CLEAN_BROWSER: StackBrowserEvidence = {
+  screenshots: [],
+  consoleErrors: [],
+  unloadViolations: [],
+  pageErrors: [],
+  failedRequests: [],
+  externalRequests: [],
+  requests: 1,
+  websockets: 1,
+};
+const step = (name: string, state: PanelStep['state'], files: number): PanelStep => ({
+  step: name,
+  state,
+  datasets: 3,
+  files,
+  screenshot: `kb-${name}.png`,
+});
+/** The three panel sessions as the stack lane records them, in order. */
+function panelSessions(): PanelSessionEvidence[] {
+  const restored = [
+    step('datasets', 'list', 0),
+    step('files', 'list', 2),
+    step('filter', 'list', 1),
+    step('preview', 'list', 1),
+    step('preview-unavailable', 'failed', 1),
+    step('no-match', 'no-match', 0),
+  ];
+  return [
+    [step('not-configured', 'not-configured', 0)],
+    [step('unavailable', 'failed', 0)],
+    restored,
+  ].map((steps) => ({
+    browser: { ...CLEAN_BROWSER, screenshots: steps.map(({ screenshot }) => screenshot) },
+    steps,
+  }));
+}
+
+it('accepts the three panel sessions in order and returns their steps and screenshots', () => {
+  const sessions = panelSessions();
+
+  const evidence = expectPanelEvidence(sessions);
+
+  expect(evidence.steps).toEqual(sessions.flatMap(({ steps }) => steps));
+  expect(evidence.screenshots).toEqual([
+    'kb-not-configured.png',
+    'kb-unavailable.png',
+    'kb-datasets.png',
+    'kb-files.png',
+    'kb-filter.png',
+    'kb-preview.png',
+    'kb-preview-unavailable.png',
+    'kb-no-match.png',
+  ]);
+});
+
+it.each([
+  [
+    'a missing preview step',
+    (sessions: PanelSessionEvidence[]) => {
+      const [first, second, restored] = sessions;
+      if (first === undefined || second === undefined || restored === undefined) return sessions;
+      const steps = restored.steps.filter(({ step: name }) => name !== 'preview');
+      const screenshots = steps.map(({ screenshot }) => screenshot);
+      return [first, second, { browser: { ...restored.browser, screenshots }, steps }];
+    },
+  ],
+  [
+    'the preview steps swapped',
+    (sessions: PanelSessionEvidence[]) => {
+      const [first, second, restored] = sessions;
+      if (first === undefined || second === undefined || restored === undefined) return sessions;
+      const [a, b, c, d, e, f] = restored.steps;
+      if ([a, b, c, d, e, f].includes(undefined)) return sessions;
+      const steps = [a, b, c, e, d, f] as PanelStep[];
+      const screenshots = steps.map(({ screenshot }) => screenshot);
+      return [first, second, { browser: { ...restored.browser, screenshots }, steps }];
+    },
+  ],
+  [
+    'a preview that counts another file',
+    (sessions: PanelSessionEvidence[]) =>
+      sessions.map((session) => ({
+        ...session,
+        steps: session.steps.map((entry) =>
+          entry.step === 'preview' ? { ...entry, files: 2 } : entry,
+        ),
+      })),
+  ],
+  [
+    'a screenshot the steps do not name',
+    (sessions: PanelSessionEvidence[]) =>
+      sessions.map((session, index) =>
+        index === 2
+          ? {
+              ...session,
+              browser: {
+                ...session.browser,
+                screenshots: [...session.browser.screenshots, 'kb-extra.png'],
+              },
+            }
+          : session,
+      ),
+  ],
+  [
+    'a console error in the restored session',
+    (sessions: PanelSessionEvidence[]) =>
+      sessions.map((session, index) =>
+        index === 2
+          ? { ...session, browser: { ...session.browser, consoleErrors: ['boom'] } }
+          : session,
+      ),
+  ],
+  [
+    'a failed request in the not-configured session',
+    (sessions: PanelSessionEvidence[]) =>
+      sessions.map((session, index) =>
+        index === 0
+          ? { ...session, browser: { ...session.browser, failedRequests: ['GET /x'] } }
+          : session,
+      ),
+  ],
+  [
+    'an external request in the unavailable session',
+    (sessions: PanelSessionEvidence[]) =>
+      sessions.map((session, index) =>
+        index === 1
+          ? { ...session, browser: { ...session.browser, externalRequests: ['http://x/'] } }
+          : session,
+      ),
+  ],
+])('fails the panel evidence with %s', (_label, change) => {
+  // An assertion failure, not a type error: the helper itself rejects the evidence.
+  expect(() => expectPanelEvidence(change(panelSessions()))).toThrow(/^expected /);
 });

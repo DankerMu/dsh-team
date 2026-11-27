@@ -33,6 +33,12 @@ export type InstanceCall =
   | { readonly kind: 'datasets' }
   | { readonly kind: 'documents'; readonly datasetId: string; readonly keywords?: string }
   | {
+      readonly kind: 'chunks';
+      readonly datasetId: string;
+      readonly documentId: string;
+      readonly page: number;
+    }
+  | {
       readonly kind: 'retrieval';
       readonly datasetIds: readonly string[];
       /** QUESTION unless named. */
@@ -56,9 +62,16 @@ interface FactsByKind {
   documents: CallFacts<'documents'> & {
     readonly total: number | null;
     readonly documents: number | null;
-    /** Seed file names only; every other name is counted in `others`. */
+    /** Seed file names with a 32-hex ID only; every other row is counted in `others`. */
     readonly files: readonly string[];
+    /** The IDs of the `files` rows, in the same order. */
+    readonly ids: readonly string[];
     readonly others: number;
+  };
+  /** Counts only: no chunk text reaches the facts. */
+  chunks: CallFacts<'chunks'> & {
+    readonly total: number | null;
+    readonly chunks: number | null;
   };
   retrieval: CallFacts<'retrieval'> & {
     readonly chunks: number | null;
@@ -88,7 +101,8 @@ function isSeedEntry(value: unknown): boolean {
 const DEFAULTS = {
   version: { version: null },
   datasets: { datasets: null, seeds: [] },
-  documents: { total: null, documents: null, files: [], others: 0 },
+  documents: { total: null, documents: null, files: [], ids: [], others: 0 },
+  chunks: { total: null, chunks: null },
   retrieval: { chunks: null, seedChunks: 0, seedDatasets: [], excluded: null },
 } as const;
 const VALIDATORS: { [K in Kind]: Record<keyof (typeof DEFAULTS)[K], (value: unknown) => boolean> } =
@@ -104,8 +118,10 @@ const VALIDATORS: { [K in Kind]: Record<keyof (typeof DEFAULTS)[K], (value: unkn
       files: (value) =>
         Array.isArray(value) &&
         value.every((name: unknown) => SEED_FILES.some((file) => file === name)),
+      ids: (value) => Array.isArray(value) && value.every(isHexId),
       others: isCount,
     },
+    chunks: { total: nullableCount, chunks: nullableCount },
     retrieval: {
       chunks: nullableCount,
       seedChunks: isCount,
@@ -140,6 +156,13 @@ function callRequest(call: InstanceCall) {
         method: 'GET',
       };
     }
+    case 'chunks':
+      return {
+        path:
+          `datasets/${call.datasetId}/documents/${call.documentId}/chunks` +
+          `?page=${String(call.page)}&page_size=20`,
+        method: 'GET',
+      };
     case 'retrieval':
       return {
         path: 'retrieval',
@@ -184,8 +207,15 @@ const project = {
     const documents = list(body.documents);
     facts.total = Number.isSafeInteger(body.total) && body.total >= 0 ? body.total : null;
     facts.documents = documents === undefined ? null : documents.length;
-    facts.files = (documents ?? []).map((item) => item.name).filter((name) => seedFiles.includes(name));
-    facts.others = (documents ?? []).length - facts.files.length;
+    const seeded = (documents ?? []).filter((item) => seedFiles.includes(item.name) && isId(item.id));
+    facts.files = seeded.map((item) => item.name);
+    facts.ids = seeded.map((item) => item.id);
+    facts.others = (documents ?? []).length - seeded.length;
+  },
+  chunks(body) {
+    const chunks = list(body.chunks);
+    facts.total = Number.isSafeInteger(body.total) && body.total >= 0 ? body.total : null;
+    facts.chunks = chunks === undefined ? null : chunks.length;
   },
   retrieval(body) {
     const chunks = list(body.chunks);
@@ -720,6 +750,7 @@ async function seedDocuments(call: InstanceProxy, ids: Map<string, string>) {
       total: 2,
       documents: 2,
       files: [...seed.files].sort(),
+      ids: [expect.any(String), expect.any(String)],
       others: 0,
     });
     totals.push(page.total);
@@ -733,15 +764,32 @@ async function seedDocuments(call: InstanceProxy, ids: Map<string, string>) {
     total: 1,
     documents: 1,
     files: ['expense-policy.txt'],
+    ids: [expect.any(String)],
     others: 0,
   });
-  return { documentsTotals: totals, keywordsTotal: keywords.total };
+  const expenseId = String(keywords.ids[0]);
+  return { documentsTotals: totals, keywordsTotal: keywords.total, expenseId };
+}
+
+/**
+ * A chunk page far past the end of `expense-policy.txt`: whatever shape real rc2 gives it must
+ * read as `ok` with no chunks and the document's positive total. Not a retrieval.
+ */
+export async function pastTheEndChunks(
+  call: (chunks: Extract<InstanceCall, { kind: 'chunks' }>) => Promise<FactsByKind['chunks']>,
+  datasetId: string,
+  documentId: string,
+): Promise<number> {
+  const beyond = await call({ kind: 'chunks', datasetId, documentId, page: 999_999 });
+  expect(beyond).toMatchObject({ status: 200, result: 'ok', chunks: 0 });
+  expect(beyond.total).toBeGreaterThan(0);
+  return Number(beyond.total);
 }
 
 /**
  * After `ragflow-cpu` is back: the proxy's first requests to the real rc2. Retrieval is paid
  * (user-accepted 2026-11-03) and limited to these four calls: three ask QUESTION, the policies-only
- * positive control asks SEARCH_QUESTION.
+ * positive control asks SEARCH_QUESTION. The past-the-end chunk page is a read, not a retrieval.
  */
 export async function proxyAfterRestore(admin: Administrator, outage: Outage, call: InstanceProxy) {
   const ragflowRestartMs = await outage.restore();
@@ -754,7 +802,8 @@ export async function proxyAfterRestore(admin: Administrator, outage: Outage, ca
     version: EXPECTED_RAGFLOW_VERSION,
   });
   const ids = await seedIds(call);
-  const documents = await seedDocuments(call, ids);
+  const { expenseId, ...documents } = await seedDocuments(call, ids);
+  const pastTheEndTotal = await pastTheEndChunks(call, String(ids.get(POLICIES)), expenseId);
   const all = [...ids.values()];
   const retrieval = await call({ kind: 'retrieval', datasetIds: all });
   expect(retrieval).toMatchObject({ status: 200, result: 'ok', excluded: [] });
@@ -794,6 +843,7 @@ export async function proxyAfterRestore(admin: Administrator, outage: Outage, ca
     version: version.version,
     seedDatasets: ids.size,
     ...documents,
+    pastTheEndTotal,
     retrieval: {
       result: retrieval.result,
       chunks: retrieval.chunks,

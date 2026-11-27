@@ -41,6 +41,7 @@ import {
 import { unusedPort } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import {
+  expectPanelEvidence,
   notConfiguredPanel,
   panelNeedles,
   restoredPanel,
@@ -780,26 +781,11 @@ it('builds both images, starts the delivered compose platform, converses through
   expect(provider.requests).toBeGreaterThanOrEqual(3);
   expect(provider.toolResults).toBeGreaterThanOrEqual(1);
   expect(provider.markedRequests).toBeGreaterThanOrEqual(3);
-  const sessions = [panel.notConfigured, panel.unavailable, panel.restored];
-  for (const session of sessions)
-    expect({
-      consoleErrors: session.browser.consoleErrors,
-      pageErrors: session.browser.pageErrors,
-      failedRequests: session.browser.failedRequests,
-      externalRequests: session.browser.externalRequests,
-    }).toEqual({ consoleErrors: [], pageErrors: [], failedRequests: [], externalRequests: [] });
-  const panelSteps = sessions.flatMap(({ steps }) => steps);
-  expect(panelSteps.map(({ step, state, screenshot }) => [step, state, screenshot])).toEqual([
-    ['not-configured', 'not-configured', 'kb-not-configured.png'],
-    ['unavailable', 'failed', 'kb-unavailable.png'],
-    ['datasets', 'list', 'kb-datasets.png'],
-    ['files', 'list', 'kb-files.png'],
-    ['filter', 'list', 'kb-filter.png'],
-    ['no-match', 'no-match', 'kb-no-match.png'],
+  const panelEvidence = expectPanelEvidence([
+    panel.notConfigured,
+    panel.unavailable,
+    panel.restored,
   ]);
-  expect(panelSteps.map(({ files }) => files)).toEqual([0, 0, 0, 2, 1, 0]);
-  const panelScreenshots = sessions.flatMap(({ browser: observed }) => observed.screenshots);
-  expect(panelScreenshots).toEqual(panelSteps.map(({ screenshot }) => screenshot));
   for (const observed of scope.sessions)
     expect({
       consoleErrors: observed.consoleErrors,
@@ -878,7 +864,7 @@ it('builds both images, starts the delivered compose platform, converses through
           markedRequests: provider.markedRequests,
         },
         proxy,
-        panel: { steps: panelSteps, screenshots: panelScreenshots },
+        panel: panelEvidence,
         scope: {
           steps: scope.steps,
           screenshots: scopeScreenshots,

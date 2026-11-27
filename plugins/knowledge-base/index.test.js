@@ -139,7 +139,7 @@ describe('availability', () => {
     'http://10.0.0.3:65535',
     'http://255.255.255.243:443',
     'http://0.0.0.3:80',
-  ])('registers both GET routes for the address %s with a valid token', (platformUrl) => {
+  ])('registers the three GET routes for the address %s with a valid token', (platformUrl) => {
     for (const config of [{ platformUrl }, Object.assign(Object.create(null), { platformUrl })]) {
       const { ctx, injections, routes } = recordingContext();
 
@@ -154,6 +154,7 @@ describe('availability', () => {
       ).toEqual([
         [DATASETS_PATH, ['GET'], 'buffered'],
         [DOCUMENTS_PATH, ['GET'], 'buffered'],
+        ['/api/knowledge-base.chunks', ['GET'], 'buffered'],
       ]);
       expect(JSON.stringify(injections)).not.toContain(TOKEN);
       expect(JSON.stringify(injections)).not.toContain(platformUrl);

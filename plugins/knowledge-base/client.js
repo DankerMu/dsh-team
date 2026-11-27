@@ -1,11 +1,11 @@
 // @ts-check
 /**
- * Classic-script client half of the knowledge-base plugin: the 「知识库」 panel and the composer
- * scope control. As with the released panels (定时任务), the panel's entry is one
- * `sidebar.panellist` row and its content is the `main` page under the same key. It reads only
- * this instance's own `api/knowledge-base.*` routes, whose host half forwards to the platform
- * proxy; browsing touches no Session or scope data. The scope control reads the host's `kbScope`
- * projection and writes only through the `/kb-scope` command.
+ * Classic-script client half of the knowledge-base plugin: the 「知识库」 panel with its read-only
+ * file preview, and the composer scope control. As with the released panels (定时任务), the
+ * panel's entry is one `sidebar.panellist` row and its content is the `main` page under the same
+ * key. It reads only this instance's own `api/knowledge-base.*` routes, whose host half forwards
+ * to the platform proxy; browsing and previewing touch no Session or scope data. The scope control
+ * reads the host's `kbScope` projection and writes only through the `/kb-scope` command.
  */
 (() => {
   const ID = 'knowledge-base';
@@ -27,6 +27,12 @@
     failed: '文件加载失败',
     empty: '该知识库暂无文件',
     'no-match': '没有名称匹配的文件',
+  };
+  const PREVIEW_TEXT = {
+    loading: '正在加载内容…',
+    'not-configured': '知识库未配置，无法预览文件',
+    failed: '内容加载失败',
+    empty: '该文件没有可预览的内容',
   };
   /** @type {import('./client.types.js').KbAnswer} */
   const FAILED = { result: 'failed' };
@@ -73,6 +79,27 @@
     return valid ? value.map(({ id, name }) => ({ id, name })) : undefined;
   }
 
+  /** @param {unknown} value @returns {value is number} */
+  const isCount = (value) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+  /**
+   * A preview page: the count and every chunk's text, or the failure when any part is malformed.
+   * @param {unknown} total
+   * @param {unknown[]} chunks
+   * @returns {import('./client.types.js').KbAnswer}
+   */
+  function chunksAnswer(total, chunks) {
+    /** @type {import('./client.types.js').KbChunk[]} */
+    const texts = [];
+    for (const chunk of chunks) {
+      const content =
+        typeof chunk === 'object' && chunk !== null ? Reflect.get(chunk, 'content') : undefined;
+      if (typeof content !== 'string') return FAILED;
+      texts.push({ content });
+    }
+    return isCount(total) ? { result: 'ok', total, chunks: texts } : FAILED;
+  }
+
   /**
    * The route's answer as the panel uses it; anything but `ok` or `not-configured` is a failure.
    * @param {unknown} body
@@ -80,14 +107,16 @@
    */
   function answerOf(body) {
     if (typeof body !== 'object' || body === null) return FAILED;
-    const { result, datasets, total, documents } = /** @type {Record<string, unknown>} */ (body);
+    const { result, datasets, total, documents, chunks } = /** @type {Record<string, unknown>} */ (
+      body
+    );
     if (result === 'not-configured') return { result };
     if (result !== 'ok') return FAILED;
+    if (Array.isArray(chunks)) return chunksAnswer(total, chunks);
     const listed = entries(datasets ?? documents);
     if (listed === undefined) return FAILED;
     if (datasets !== undefined) return { result, datasets: listed };
-    const count = typeof total === 'number' && Number.isSafeInteger(total) && total >= 0;
-    return count ? { result, total: /** @type {number} */ (total), documents: listed } : FAILED;
+    return isCount(total) ? { result, total, documents: listed } : FAILED;
   }
 
   /**
@@ -187,7 +216,8 @@
   const PANEL_CSS =
     '[data-dsh-team-kb-page] [data-dsh-team-kb-dataset] > button{background:transparent}' +
     '[data-dsh-team-kb-page] [data-dsh-team-kb-dataset] > button:hover' +
-    '{background:var(--dsw-alias-interactive-bg-hover, transparent)}';
+    '{background:var(--dsw-alias-interactive-bg-hover, transparent)}' +
+    '[data-dsh-team-kb-page] [data-dsh-team-kb-file] > button:hover{text-decoration:underline}';
   const PANEL_TITLE = {
     display: 'block',
     boxSizing: 'border-box',
@@ -213,6 +243,27 @@
     pointerEvents: 'none',
   };
   const PANEL_FILE = { display: 'flex', alignItems: 'center', gap: '6px', height: '26px' };
+  // The whole row opens the preview; the button keeps the row's look and only the name as text.
+  const PANEL_FILE_BUTTON = {
+    ...PANEL_FILE,
+    flex: '1 1 auto',
+    minWidth: 0,
+    padding: 0,
+    border: 'none',
+    background: 'transparent',
+    color: 'inherit',
+    font: 'inherit',
+    textAlign: 'left',
+    cursor: 'pointer',
+  };
+  const PREVIEW_CHUNK = {
+    margin: 0,
+    padding: '10px 0',
+    borderBottom: DIVIDER,
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    lineHeight: 1.6,
+  };
   const PANEL_NAME = {
     minWidth: 0,
     overflow: 'hidden',
@@ -309,21 +360,46 @@
     return `api/knowledge-base.documents?${query}${filter}`;
   }
 
+  /** @param {number | undefined} total */
+  const pageCount = (total) => Math.max(1, Math.ceil((total ?? 0) / PAGE_SIZE));
+
   /**
-   * One page of documents; the paging row only when there is more than one page.
-   * @param {import('./client.types.js').KbFilesView} view
+   * 「上一页」, 「第 x / N 页」 and 「下一页」, each bounded by the first and the last page.
+   * @param {number} page
+   * @param {number} pages
    * @param {(page: number) => void} go
    */
-  function filesPage(view, go) {
-    const pages = Math.max(1, Math.ceil((view.total ?? 0) / PAGE_SIZE));
+  function pagingRow(page, pages, go) {
+    return h(
+      'div',
+      { key: 'paging', style: PANEL_PAGING },
+      button('上一页', () => go(page - 1), page <= 1),
+      h('span', null, `第 ${String(page)} / ${String(pages)} 页`),
+      button('下一页', () => go(page + 1), page >= pages),
+    );
+  }
+
+  /**
+   * One page of documents; the paging row only when there is more than one page. Clicking a file
+   * row opens its preview.
+   * @param {import('./client.types.js').KbFilesView} view
+   * @param {(page: number) => void} go
+   * @param {(file: import('./client.types.js').KbEntry) => void} open
+   */
+  function filesPage(view, go, open) {
+    const pages = pageCount(view.total);
     const fileGlyph = glyph(FILE_PATHS, 14, 1.6, { flex: 'none', color: SECONDARY });
     // The glyph has no text, so the row's text stays exactly the file name.
     const rows = (view.documents ?? []).map(({ id, name }) =>
       h(
         'li',
         { key: id, 'data-dsh-team-kb-file': id, title: name, style: PANEL_FILE },
-        fileGlyph,
-        h('span', { style: PANEL_NAME }, name),
+        h(
+          'button',
+          { type: 'button', onClick: () => open({ id, name }), style: PANEL_FILE_BUTTON },
+          fileGlyph,
+          h('span', { style: PANEL_NAME }, name),
+        ),
       ),
     );
     const list = h(
@@ -331,15 +407,7 @@
       { key: 'files', style: { listStyle: 'none', margin: 0, padding: 0 } },
       ...rows,
     );
-    if (pages <= 1) return [list];
-    const paging = h(
-      'div',
-      { key: 'paging', style: PANEL_PAGING },
-      button('上一页', () => go(view.page - 1), view.page <= 1),
-      h('span', null, `第 ${String(view.page)} / ${String(pages)} 页`),
-      button('下一页', () => go(view.page + 1), view.page >= pages),
-    );
-    return [list, paging];
+    return pages <= 1 ? [list] : [list, pagingRow(view.page, pages, go)];
   }
 
   // The field and its submit button read as one bordered group: their inner corners are square
@@ -389,8 +457,8 @@
     );
   }
 
-  /** @param {{ datasetId: string }} props */
-  function DatasetFiles({ datasetId }) {
+  /** @param {{ datasetId: string; open: (file: import('./client.types.js').KbEntry) => void }} props */
+  function DatasetFiles({ datasetId, open }) {
     const request = useRequest();
     /** @type {[import('./client.types.js').KbFilesView, (view: import('./client.types.js').KbFilesView) => void]} */
     const [view, setView] = React.useState(
@@ -433,7 +501,7 @@
     const listed = view.state === 'list';
     const retry = () => load(view.page, view.keywords);
     const body = listed
-      ? filesPage(view, (page) => load(page, view.keywords))
+      ? filesPage(view, (page) => load(page, view.keywords), open)
       : [stateNotice(FILES_TEXT[view.state], view.state === 'failed' ? retry : undefined)];
     // The count and the form keep their child slots, so the field survives a reload.
     return h(
@@ -469,8 +537,9 @@
    * @param {import('./client.types.js').KbEntry} dataset
    * @param {boolean} open
    * @param {() => void} toggle
+   * @param {(preview: import('./client.types.js').KbPreviewTarget) => void} preview
    */
-  function datasetRow({ id, name }, open, toggle) {
+  function datasetRow({ id, name }, open, toggle, preview) {
     // The chevron sits beside the title button, never in it: the button's text is the name.
     const turn = { ...PANEL_CHEVRON, transform: open ? 'rotate(90deg)' : 'none' };
     const title = h(
@@ -487,7 +556,92 @@
       },
       glyph(CHEVRON_PATHS, 14, 1.8, turn),
       title,
-      open ? h(DatasetFiles, { datasetId: id }) : null,
+      open
+        ? h(DatasetFiles, {
+            datasetId: id,
+            /** @param {import('./client.types.js').KbEntry} file */
+            open: (file) => preview({ datasetId: id, documentId: file.id, name: file.name }),
+          })
+        : null,
+    );
+  }
+
+  /**
+   * The displayed state of a preview answer for its page.
+   * @param {import('./client.types.js').KbAnswer} answer
+   * @param {number} page
+   * @returns {import('./client.types.js').KbPreviewView}
+   */
+  function previewOf(answer, page) {
+    if (answer.result !== 'ok') return { state: answer.result, page };
+    const { total = 0, chunks = [] } = answer;
+    return chunks.length === 0 ? { state: 'empty', page } : { state: 'list', page, total, chunks };
+  }
+
+  /**
+   * The read-only preview of one file: its name, 「返回列表」 and one page of its parsed chunks
+   * as plain text, with the paging row only when there is more than one page. It holds one
+   * request at a time and offers no edit, upload or download.
+   * @param {import('./client.types.js').KbPreviewTarget & { back: () => void }} props
+   */
+  function FilePreview({ datasetId, documentId, name, back }) {
+    const request = useRequest();
+    /** @type {[import('./client.types.js').KbPreviewView, (view: import('./client.types.js').KbPreviewView) => void]} */
+    const [view, setView] = React.useState(
+      /** @type {import('./client.types.js').KbPreviewView} */ ({ state: 'loading', page: 1 }),
+    );
+    const load = React.useCallback(
+      /** @param {number} page */
+      (page) => {
+        setView({ state: 'loading', page });
+        const query = `datasetId=${datasetId}&documentId=${documentId}&page=${String(page)}`;
+        request(`api/knowledge-base.chunks?${query}&pageSize=${String(PAGE_SIZE)}`, (answer) =>
+          setView(previewOf(answer, page)),
+        );
+      },
+      [request, datasetId, documentId],
+    );
+    React.useEffect(() => {
+      load(1);
+    }, [load]);
+    const pages = pageCount(view.total);
+    // Each chunk is a text child: markup in RAGFlow's text is shown, never interpreted.
+    const body =
+      view.state === 'list'
+        ? [
+            h(
+              'ol',
+              { key: 'chunks', style: { listStyle: 'none', margin: 0, padding: 0 } },
+              ...(view.chunks ?? []).map(({ content }, index) =>
+                h(
+                  'li',
+                  {
+                    key: `${String(view.page)}-${String(index)}`,
+                    'data-dsh-team-kb-chunk': '',
+                    style: PREVIEW_CHUNK,
+                  },
+                  content,
+                ),
+              ),
+            ),
+            pages > 1 ? pagingRow(view.page, pages, load) : null,
+          ]
+        : [
+            stateNotice(
+              PREVIEW_TEXT[view.state],
+              view.state === 'failed' ? () => load(view.page) : undefined,
+            ),
+          ];
+    return h(
+      'div',
+      { 'data-dsh-team-kb-preview': documentId, [STATE]: view.state },
+      h(
+        'div',
+        { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' } },
+        button('返回列表', back),
+        h('h3', { title: name, style: { ...PANEL_NAME, margin: 0, fontSize: '16px' } }, name),
+      ),
+      ...body,
     );
   }
 
@@ -502,6 +656,24 @@
     );
     const [search, setSearch] = React.useState('');
     const [expanded, setExpanded] = React.useState(/** @type {ReadonlySet<string>} */ (new Set()));
+    // The list stays mounted while a preview shows, so 「返回列表」 finds it as it was left.
+    const [preview, setPreview] = React.useState(
+      /** @type {import('./client.types.js').KbPreviewTarget | null} */ (null),
+    );
+    // The list and the preview share one scroller; hiding the list clamps its offset, so the
+    // list's offset is saved on opening and restored once the list shows again.
+    const scroller = React.useRef(/** @type {{ scrollTop: number } | null} */ (null));
+    const listTop = React.useRef(/** @type {number | null} */ (null));
+    /** @param {import('./client.types.js').KbPreviewTarget} target */
+    const openPreview = (target) => {
+      listTop.current = scroller.current?.scrollTop ?? 0;
+      setPreview(target);
+    };
+    React.useEffect(() => {
+      if (preview !== null || listTop.current === null || scroller.current === null) return;
+      scroller.current.scrollTop = listTop.current;
+      listTop.current = null;
+    }, [preview]);
     const load = React.useCallback(() => {
       setList({ result: 'loading' });
       setExpanded(new Set());
@@ -538,13 +710,16 @@
         ? h(
             'ul',
             { style: { listStyle: 'none', margin: 0, padding: 0 } },
-            ...view.rows.map((row) => datasetRow(row, expanded.has(row.id), () => toggle(row.id))),
+            ...view.rows.map((row) =>
+              datasetRow(row, expanded.has(row.id), () => toggle(row.id), openPreview),
+            ),
           )
         : stateNotice(LIST_TEXT[view.state], view.state === 'failed' ? load : undefined);
     return h(
       'div',
       {
         'data-dsh-team-kb-page': '',
+        ref: scroller,
         style: {
           boxSizing: 'border-box',
           height: '100%',
@@ -555,8 +730,20 @@
         },
       },
       h('style', null, PANEL_CSS),
-      header,
-      h('div', { 'data-dsh-team-kb-datasets': '', [STATE]: view.state }, content),
+      h(
+        'div',
+        // `hidden` plus an inline display, so no page stylesheet can show the list beneath.
+        preview === null ? {} : { hidden: true, style: { display: 'none' } },
+        header,
+        h('div', { 'data-dsh-team-kb-datasets': '', [STATE]: view.state }, content),
+      ),
+      preview === null
+        ? null
+        : h(FilePreview, {
+            ...preview,
+            key: `${preview.datasetId}/${preview.documentId}`,
+            back: () => setPreview(null),
+          }),
     );
   }
 

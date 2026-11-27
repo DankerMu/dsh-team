@@ -15,6 +15,7 @@ import {
   RAGFLOW_RESULTS,
   RAGFLOW_TIMEOUT_MS,
   RAGFLOW_VERSION_PATTERN,
+  listRagflowChunks,
   listRagflowDatasets,
   listRagflowDocuments,
   ragflowVersion,
@@ -76,6 +77,26 @@ const RAGFLOW_DOCUMENTS_SCHEMA = {
     result: { type: 'string', enum: RAGFLOW_RESULTS },
     total: { type: 'integer', minimum: 0 },
     documents: ENTRIES_SCHEMA,
+  },
+} as const;
+/** A closed-set result that carries the total and one page of chunk texts when `ok`. */
+const RAGFLOW_CHUNKS_SCHEMA = {
+  type: 'object',
+  // Closed at both levels so the serializer drops any upstream field a mapping defect let through.
+  additionalProperties: false,
+  required: ['result'],
+  properties: {
+    result: { type: 'string', enum: RAGFLOW_RESULTS },
+    total: { type: 'integer', minimum: 0 },
+    chunks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['content'],
+        properties: { content: { type: 'string' } },
+      },
+    },
   },
 } as const;
 const DATASET_ID = new RegExp(RAGFLOW_DATASET_ID_PATTERN);
@@ -141,6 +162,42 @@ const RETRIEVAL_BODY_SCHEMA = {
   },
 } as const;
 
+/** The required page of both paged routes, as their querystring schemas document it. */
+const PAGE_PROPERTIES = {
+  page: { type: 'string', pattern: PAGE_PATTERN },
+  page_size: { type: 'string', pattern: PAGE_SIZE_PATTERN },
+} as const;
+/** The chunk route's contract; the handler's own raw parse is the authority. */
+const CHUNKS_ROUTE_SCHEMA = {
+  summary:
+    'List one page of the parsed text chunks of one document of one dataset of the ' +
+    'configured RAGFlow, in RAGFlow order, for an authenticated instance; never the ' +
+    'original file. Chunks disabled for retrieval are listed too. An answer about another ' +
+    'document or dataset is upstream-error. A malformed ID, a fragment, a repeated, ' +
+    'unknown or valueless key, an undecodable escape and a dataset the key cannot see ' +
+    'answer invalid-request; a missing document or dataset is upstream-error.',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id', 'documentId'],
+    properties: {
+      id: { type: 'string', pattern: RAGFLOW_DATASET_ID_PATTERN },
+      documentId: { type: 'string', pattern: RAGFLOW_DATASET_ID_PATTERN },
+    },
+  },
+  querystring: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['page', 'page_size'],
+    properties: PAGE_PROPERTIES,
+  },
+  response: {
+    200: RAGFLOW_CHUNKS_SCHEMA,
+    401: ERROR_SCHEMA,
+    500: ERROR_SCHEMA,
+  },
+} as const;
+
 /**
  * Empty or only whitespace as rc2 trims it: Go's TrimSpace also strips U+0085, which JS `trim`
  * keeps, so a text that looks non-blank here would reach rc2 empty.
@@ -176,6 +233,15 @@ function queryFields(url: string): Map<string, string> | null {
   return fields;
 }
 
+/** The required `page` and `page_size` of decoded query fields, or null when either is invalid. */
+function pageOf(fields: ReadonlyMap<string, string>): { page: number; pageSize: number } | null {
+  const page = fields.get('page');
+  const pageSize = fields.get('page_size');
+  if (page === undefined || !PAGE.test(page)) return null;
+  if (pageSize === undefined || !PAGE_SIZE.test(pageSize)) return null;
+  return { page: Number(page), pageSize: Number(pageSize) };
+}
+
 /**
  * The page a document request asks for, parsed from the raw target because Ajv's
  * `removeAdditional` and type coercion rewrite `request.query`; null for anything else.
@@ -183,17 +249,21 @@ function queryFields(url: string): Map<string, string> | null {
 function documentsQuery(url: string): RagflowDocumentsQuery | null {
   const fields = queryFields(url);
   if (fields === null) return null;
-  const page = fields.get('page');
-  const pageSize = fields.get('page_size');
   const keywords = fields.get('keywords');
   // Any key beside these three is unknown.
   if (fields.size !== (keywords === undefined ? 2 : 3)) return null;
-  if (page === undefined || !PAGE.test(page)) return null;
-  if (pageSize === undefined || !PAGE_SIZE.test(pageSize)) return null;
-  if (keywords === undefined) return { page: Number(page), pageSize: Number(pageSize) };
+  const page = pageOf(fields);
+  if (page === null || keywords === undefined) return page;
   // A blank filter would silently list every document.
   if (isBlank(keywords) || Buffer.byteLength(keywords) > MAX_KEYWORDS_BYTES) return null;
-  return { page: Number(page), pageSize: Number(pageSize), keywords };
+  return { ...page, keywords };
+}
+
+/** The page a chunk request asks for, parsed from the raw target like `documentsQuery`. */
+function chunksQuery(url: string): { page: number; pageSize: number } | null {
+  const fields = queryFields(url);
+  // Exactly `page` and `page_size`: no filter, and no `available`.
+  return fields?.size === 2 ? pageOf(fields) : null;
 }
 
 const isDatasetId = (value: unknown): value is string =>
@@ -362,8 +432,7 @@ export const ragflowProxyRoutes: FastifyPluginCallback<{
           additionalProperties: false,
           required: ['page', 'page_size'],
           properties: {
-            page: { type: 'string', pattern: PAGE_PATTERN },
-            page_size: { type: 'string', pattern: PAGE_SIZE_PATTERN },
+            ...PAGE_PROPERTIES,
             keywords: {
               type: 'string',
               description: `Must not be blank; at most ${String(MAX_KEYWORDS_BYTES)} UTF-8 bytes.`,
@@ -387,6 +456,27 @@ export const ragflowProxyRoutes: FastifyPluginCallback<{
         (settings, signal, deadlineMs) =>
           listRagflowDocuments(settings, id, query, signal, deadlineMs),
         'RAGFlow proxy documents failure',
+      );
+    },
+  );
+  app.get<{ Params: { id: string; documentId: string } }>(
+    '/_platform/instance-api/ragflow/datasets/:id/documents/:documentId/chunks',
+    {
+      exposeHeadRoute: false,
+      // The schemas document the contract; the handler's own raw parse is the authority.
+      attachValidation: true,
+      schema: CHUNKS_ROUTE_SCHEMA,
+    },
+    (request, reply) => {
+      const { id, documentId } = request.params;
+      const query = chunksQuery(request.url);
+      if (query === null || !DATASET_ID.test(id) || !DATASET_ID.test(documentId))
+        return Promise.resolve({ result: 'invalid-request' as const });
+      return relay(
+        reply,
+        (settings, signal, deadlineMs) =>
+          listRagflowChunks(settings, id, documentId, query, signal, deadlineMs),
+        'RAGFlow proxy chunks failure',
       );
     },
   );

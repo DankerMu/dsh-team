@@ -1,5 +1,6 @@
 export {
   RAGFLOW_TIMEOUT_MS,
+  listRagflowChunks,
   listRagflowDatasets,
   listRagflowDocuments,
   retrieveRagflow,
