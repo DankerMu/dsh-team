@@ -26,6 +26,6 @@
 
 ## 2. Verification
 
-- [ ] 2.1 `pnpm lint:shell`, `pnpm lint:agents`, `pnpm check:fast` and `pnpm test:integration` exit 0 locally.
-- [ ] 2.2 One real `pnpm lane:vps` run on this PR's exact head passes, and `pnpm lane:vps:post` writes this PR's Runtime evidence.
-- [ ] 2.3 The PR carries `diff-limit-exempt` with a justification if it exceeds 400 changed lines.
+- [x] 2.1 `pnpm lint:shell`, `pnpm lint:agents`, `pnpm check:fast` and `pnpm test:integration` exit 0 locally.
+- [x] 2.2 One real `pnpm lane:vps` run on this PR's exact head passes, and `pnpm lane:vps:post` writes this PR's Runtime evidence.
+- [x] 2.3 The PR carries `diff-limit-exempt` with a justification if it exceeds 400 changed lines.
