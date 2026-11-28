@@ -24,28 +24,14 @@ Enforcement: `## Enforcement Index`; per-rule table and guardrail self-test deta
 
 「交付一个单机 Docker 部署的平台，满足基线全部功能需求，并通过基线第 7 节的 14 条验收。DSH 源码不改；所有定制通过平台代码、DSH 插件、受管覆盖层和镜像构建完成。」(`docs/IMPLEMENTATION_PLAN.md` §1)
 
-- **Primary consumers**: employees on an offline intranet, each using their own DSH instance; one administrator.
-- **Lifecycle**: years (production, single Linux server with Docker).
-- **Team scale**: one maintainer plus AI agents.
-- **Strictness profile**: L3 (strict) — chosen explicitly at init; thresholds live in `constraints.yaml`. Re-run `eng-init` to change the profile; do not relax individual gates ad hoc.
-- **AI tools targeting this repo**: Claude Code (reads `CLAUDE.md`, which imports this file); other agents read this file directly.
-- **Domain language**: `CONTEXT.md` is the bounded-context and invariant map; `openspec/glossary.md` is the canonical glossary. Check both before naming a domain concept or moving business logic.
-- **Requirements and plan**: `docs/REQUIREMENTS_BASELINE.md` (F1–F48, D1–D15) and `docs/IMPLEMENTATION_PLAN.md` (T1–T12, task packages). Settled decisions there are not reopened in code review.
+- Employees on an offline intranet each use their own DSH instance, with one administrator; one maintainer plus AI agents; years in production on a single Linux server with Docker.
+- **Strictness profile**: L3 (strict); thresholds live in `constraints.yaml`. Re-run `eng-init` to change the profile; do not relax individual gates ad hoc.
+- **Domain language**: `CONTEXT.md` (bounded contexts, invariants) and `openspec/glossary.md` (canonical terms). Check both before naming a domain concept or moving business logic.
+- **Requirements and plan**: `docs/REQUIREMENTS_BASELINE.md` (F1–F49, D1–D25) and `docs/IMPLEMENTATION_PLAN.md` (T1–T12, task packages). Settled decisions there are not reopened in code review.
 
 ## Stack & Versions
 
-| Layer                    | Choice                            | Version       | Why                                                       |
-| ------------------------ | --------------------------------- | ------------- | --------------------------------------------------------- |
-| Language                 | TypeScript                        | 6.0           | upper bound supported by typescript-eslint                |
-| Runtime                  | Node.js                           | 24            | runs `.ts` sources directly; matches user image           |
-| Framework                | Fastify                           | 5             | route schemas feed the OpenAPI contract                   |
-| Persistence              | SQLite                            | 3             | better-sqlite3; `PLATFORM_DATA_DIR/platform.db` (D8, D19) |
-| Test runner              | Vitest + v8 coverage              | 5             |                                                           |
-| Platform UI              | React + Vite                      | 18, 8         | local static build served by the same Fastify origin      |
-| Platform UI browser      | Playwright Chromium               | 1.65          | pinned verification-only platform UI lane                 |
-| DSH verification browser | Chrome for Testing headless shell | 156.0.8078.80 | verification-only isolated Docker runtime                 |
-| Linter                   | ESLint, typescript-eslint         | 10, 8         | strict type-checked rule set                              |
-| Formatter                | Prettier                          | 3             |                                                           |
+TypeScript 6 on Node 24, Fastify 5, SQLite (better-sqlite3), Vitest, React 18 + Vite; layer table with reasons: `platform/AGENTS.md` § Stack & Versions.
 
 ### Dependency policy
 
@@ -101,11 +87,8 @@ resource/, assets/fonts/    local only, gitignored: upstream reference repos, li
 
 ### Local setup
 
-- Run `pnpm install` after clone. It needs Node and pnpm at the versions in `.tool-versions`, plus `hurl`, `shellcheck`, and `gitleaks` on `PATH`.
+- Run `pnpm install` after clone. Prerequisites (toolchain, `hurl`, `shellcheck`, `gitleaks`, Python 3 `pty`/`termios`, Docker socket, e2e runtime): `platform/README.md` § Local development.
 - Git hooks: husky's `prepare` (run by `pnpm install`) sets `core.hooksPath` to `.husky/_`; never override it. `.git-hooks/` holds `check-naming.sh`, not hooks: pointing `core.hooksPath` there silently skips every hook.
-- Python 3 with standard-library `pty`/`termios` support is required for administrator CLI terminal integration verification on POSIX hosts; missing prerequisites fail rather than skip that coverage.
-- `pnpm dev` builds the web package and runs the native Node watcher; a missing `.env` is optional (`platform/README.md` § Local development).
-- The source and built entrypoints need a real Docker Unix socket and await reconciliation; `pnpm e2e` provisions its own private Docker/containerd runtime on a nonroot Linux host with sudo (`scripts/README.md` § Fresh-data e2e runtime).
 
 ### Daily commands
 
@@ -116,6 +99,7 @@ All commands route through the root `package.json` scripts. Do not invent ad-hoc
 - HTTP contract: `pnpm contract:write` regenerates `schemas/openapi.json`.
 - Browser and CLI lanes: `pnpm test:ui:install` then `pnpm test:ui`; `pnpm test:cli`; administrator command `pnpm --silent cli admin create <email>`.
 - Trusted giap-vps lanes: `pnpm test:docker` (user image), `pnpm test:deploy` (Compose), `pnpm test:model` (real model), `pnpm --silent verify:docker start <reviewed-sha>` (durable Docker owner).
+- Parent-side exact-head VPS lane: `pnpm lane:vps <label> <sha> <branch>`, then `pnpm lane:vps:post <pr> <label>` (`scripts/README.md` § Parent-side VPS lane).
 - Local full stack: `pnpm seed:stack` seeds the local RAGFlow stack; `pnpm test:stack` runs the lane.
 - CI gates: `pnpm verify:docker-evidence` (Docker evidence), `pnpm lint:ci` (event concurrency), `pnpm lint:pr <base> <head>` (PR commit messages and added paths).
 
@@ -147,16 +131,13 @@ All commands route through the root `package.json` scripts. Do not invent ad-hoc
 | CI event scheduling    | `pnpm lint:ci`                                     | [scripts/README.md](scripts/README.md#evidence-required-ci-event-scheduling)           |
 | Trusted Docker custody | `pnpm --silent verify:docker start <reviewed-sha>` | [scripts/README.md](scripts/README.md#evidence-required-trusted-docker-custody)        |
 
-- Every command here is a root `package.json` script and is mirrored in `constraints.yaml` `verification`.
-- A surface with no verification command is review-only, and the PR must say so.
+- Every command here is a root `package.json` script mirrored in `constraints.yaml` `verification`; a surface with no verification command is review-only, and the PR must say so.
 
 ## Runtime Lifecycle
 
-- `pnpm dev:bg` starts the dev server in the background, `pnpm dev:stop` stops it, `pnpm dev:status` probes health, `pnpm logs` tails logs.
+- `pnpm dev:bg` starts the dev server in the background, `pnpm dev:stop` stops it, `pnpm dev:status` probes health, `pnpm logs` tails logs; background locking and the e2e runtime: `scripts/README.md`.
 - The dev server listens on `PLATFORM_PORT` (default 8080); health check at `http://127.0.0.1:8080/healthz`. Verify only after the health check passes.
-- Never verify against a stale process — restart after dependency, schema, or config changes.
-- Never leave orphan dev processes — run `pnpm dev:stop` when done.
-- Background lifecycle locking and the e2e runtime: `scripts/README.md`.
+- Never verify against a stale process (restart after dependency, schema, or config changes), and never leave orphan dev processes (`pnpm dev:stop` when done).
 
 ## Important Development Notes
 
@@ -195,17 +176,7 @@ Max 10 entries, dated, pruned at milestones. Each records a verified development
 - Before merging, inspect the full `gh pr view <PR> --json headRefOid,statusCheckRollup` for the frozen head and all required contexts.
   `gh pr checks` alone can hide an older same-head cancelled run. A successful sibling does not erase failure; resolve the actual failed/cancelled run and recheck.
   Never use admin bypass, delete required checks or treat skipped/cancelled dependencies as successful.
-
-## Code Review Self-Check
-
-- Can explain "why this approach" against the nearest obvious alternative; matched existing patterns unless there is a stated reason to diverge.
-- Verified the change is made at the correct layer, not by silencing a symptom.
-- Ran the narrowest checks covering every changed surface, and they pass on this branch.
-- Added or updated tests, and saw the new tests fail before the fix and pass after.
-- Checked canonicality: no `_v2` files, no duplicated logic, no dead exports, no scratch directories.
-- No new implicit global state; no environment-only behavior left out of `.env.example`.
-- Kept the diff focused: no drive-by refactors, no unrelated formatting churn.
-- The PR description states intent, approach, test plan, and risk, and says what was not tested.
+- Before review, the author can say why this approach beats the nearest alternative and that it sits at the correct layer rather than silencing a symptom; the diff adds no implicit global state and no drive-by refactors or formatting churn; the PR states what was not tested.
 
 ## Architecture Discipline
 
@@ -216,7 +187,7 @@ Max 10 entries, dated, pruned at milestones. Each records a verified development
 
 ## Critical Paths
 
-Touching a listed path requires human white-box review of every diff line; say so in the PR description. Elsewhere gray-box review (contracts plus runtime evidence) is sufficient. These directories are created by their task packages; the rule applies from their first commit.
+Touching a listed path requires human white-box review of every diff line; say so in the PR description. Elsewhere gray-box review (contracts plus runtime evidence) is sufficient.
 
 | Path                         | Risk class                                             | Requirement                |
 | ---------------------------- | ------------------------------------------------------ | -------------------------- |
@@ -278,46 +249,38 @@ Agents may commit to feature branches, open PRs targeting `main`, run every loca
 
 Strictness profile: **L3** (see `constraints.yaml`). Levels: `advice` < `review-only` < `warn` < `block` < `gate`. Anything below `warn` is a human promise, not a machine check.
 
-| Rule / Convention            | Where it lives                                              | Where it's checked                                    | Level       |
-| ---------------------------- | ----------------------------------------------------------- | ----------------------------------------------------- | ----------- |
-| Lint rules                   | `eslint.config.mjs`                                         | `pnpm lint` + pre-commit + CI                         | block       |
-| Formatter                    | `.prettierrc.json`                                          | `pnpm fmt:check` + pre-commit + CI                    | block       |
-| Type strictness              | `tsconfig.json`                                             | `pnpm typecheck` + CI                                 | block       |
-| Coverage, 80% per file       | `vitest.config.ts`                                          | `pnpm test` + CI                                      | block       |
-| File size and complexity     | `constraints.yaml` (size_limits)                            | `pnpm lint` + CI                                      | block       |
-| Duplicate code, 3%           | `jscpd.json` (ts/js/tsx; `*.test.ts`/`*.test.tsx` excluded) | `pnpm duplicate-code` + CI                            | block       |
-| Dead code                    | `knip.json`                                                 | `pnpm dead-code` + pre-commit + CI                    | block       |
-| Module boundaries and cycles | `.dependency-cruiser.cjs`                                   | `pnpm lint:deps` + CI                                 | block       |
-| Test pairing (TDD)           | `scripts/check-test-pairing.sh`                             | `pnpm lint:tests` + pre-commit + CI                   | block       |
-| Integration-test deadlines   | `eslint.config.mjs` (`no-restricted-syntax`)                | `pnpm lint` + pre-commit + CI                         | block       |
-| Forbidden naming, scratchpad | `.git-hooks/check-naming.sh` via `.husky/pre-commit`        | pre-commit hook + `pnpm lint:pr` in CI                | block       |
-| Conventional commits         | `commitlint.config.cjs` via `.husky/commit-msg`             | commit-msg hook + `pnpm lint:pr` in CI                | block       |
-| Secrets in commits           | gitleaks                                                    | pre-commit + CI                                       | block       |
-| Static security analysis     | Semgrep in `.github/workflows/ci.yml`                       | CI                                                    | block       |
-| API contract drift           | `schemas/openapi.json`                                      | `pnpm contract:check` + CI                            | block       |
-| Shell scripts                | shellcheck                                                  | `pnpm lint:shell` + CI                                | block       |
-| Documented commands exist    | `scripts/check-agents-commands.sh`                          | `pnpm lint:agents` + CI                               | block       |
-| Configuration inventory      | `scripts/check-config.mjs`                                  | `pnpm lint:config` via lint/check + CI                | block       |
-| CI event concurrency         | `scripts/check-ci-concurrency.mjs`                          | `pnpm lint:ci` via lint/check + CI; guardrail mutants | block       |
-| PR diff size, 400 lines      | `constraints.yaml` (size_limits.max_pr_diff_lines)          | CI                                                    | block       |
-| Lockfile matches manifest    | `.github/workflows/ci.yml`                                  | CI                                                    | block       |
-| Gates reject violations      | `scripts/test-guardrails.sh`                                | `pnpm test:guardrails` + CI                           | block       |
-| Branch protection on `main`  | GitHub branch protection                                    | server-side                                           | gate        |
-| Critical-path human review   | `## Critical Paths`                                         | PR description, reviewer                              | review-only |
-| Commented-out code           | `## Code Canonicality`                                      | reviewer                                              | review-only |
-| Agent co-author trailer      | `## Agent Operating Rules`                                  | reviewer                                              | review-only |
-| Iteration and evidence rules | `## Agent Operating Rules`                                  | reviewer                                              | review-only |
+| Rule / Convention            | Where it lives                                           | Where it's checked                                    | Level       |
+| ---------------------------- | -------------------------------------------------------- | ----------------------------------------------------- | ----------- |
+| Lint rules                   | `eslint.config.mjs`                                      | `pnpm lint` + pre-commit + CI                         | block       |
+| Formatter                    | `.prettierrc.json`                                       | `pnpm fmt:check` + pre-commit + CI                    | block       |
+| Type strictness              | `tsconfig.json`                                          | `pnpm typecheck` + CI                                 | block       |
+| Coverage, 80% per file       | `vitest.config.ts`                                       | `pnpm test` + CI                                      | block       |
+| File size and complexity     | `constraints.yaml` (size_limits)                         | `pnpm lint` + CI                                      | block       |
+| Duplicate code, 3%           | `jscpd.json` (TypeScript and JavaScript, tests excluded) | `pnpm duplicate-code` + CI                            | block       |
+| Dead code                    | `knip.json`                                              | `pnpm dead-code` + pre-commit + CI                    | block       |
+| Module boundaries and cycles | `.dependency-cruiser.cjs`                                | `pnpm lint:deps` + CI                                 | block       |
+| Test pairing (TDD)           | `scripts/check-test-pairing.sh`                          | `pnpm lint:tests` + pre-commit + CI                   | block       |
+| Integration-test deadlines   | `eslint.config.mjs` (`no-restricted-syntax`)             | `pnpm lint` + pre-commit + CI                         | block       |
+| Forbidden naming, scratchpad | `.git-hooks/check-naming.sh` via `.husky/pre-commit`     | pre-commit hook + `pnpm lint:pr` in CI                | block       |
+| Conventional commits         | `commitlint.config.cjs` via `.husky/commit-msg`          | commit-msg hook + `pnpm lint:pr` in CI                | block       |
+| Secrets in commits           | gitleaks                                                 | pre-commit + CI                                       | block       |
+| Static security analysis     | Semgrep in `.github/workflows/ci.yml`                    | CI                                                    | block       |
+| API contract drift           | `schemas/openapi.json`                                   | `pnpm contract:check` + CI                            | block       |
+| Shell scripts                | shellcheck                                               | `pnpm lint:shell` + CI                                | block       |
+| Documented commands exist    | `scripts/check-agents-commands.sh`                       | `pnpm lint:agents` + CI                               | block       |
+| Configuration inventory      | `scripts/check-config.mjs`                               | `pnpm lint:config` via lint/check + CI                | block       |
+| CI event concurrency         | `scripts/check-ci-concurrency.mjs`                       | `pnpm lint:ci` via lint/check + CI; guardrail mutants | block       |
+| PR diff size, 400 lines      | `constraints.yaml` (size_limits.max_pr_diff_lines)       | CI                                                    | block       |
+| Lockfile matches manifest    | `.github/workflows/ci.yml`                               | CI                                                    | block       |
+| Gates reject violations      | `scripts/test-guardrails.sh`                             | `pnpm test:guardrails` + CI                           | block       |
+| Branch protection on `main`  | GitHub branch protection                                 | server-side                                           | gate        |
+| Critical-path human review   | `## Critical Paths`                                      | PR description, reviewer                              | review-only |
+| Commented-out code           | `## Code Canonicality`                                   | reviewer                                              | review-only |
+| Agent co-author trailer      | `## Agent Operating Rules`                               | reviewer                                              | review-only |
+| Iteration and evidence rules | `## Agent Operating Rules`                               | reviewer                                              | review-only |
 
 `constraints.yaml` is the machine-readable source for every threshold and pattern above; lint, coverage, and hook scripts read it at run time. Change a threshold there, never in a tool config.
 
 When a rule has no enforcement entry, it is a wish, not a rule. Wire it up or remove it from this document.
 
-### Known blind spots (handed to review)
-
-- Coverage gate: proves lines ran, not that assertions are meaningful — review checks test strength.
-- Test pairing: proves a test file exists, not that it was written first or tests the right behavior.
-- Contract snapshot: catches drift in routes that declare a schema, never routes without one.
-- Integration-test deadlines: the lint rejects only `const x = Date.now() + <literal>` in `*.integration.test.ts`; budget derivation is review-only.
-  Unchecked forms: `constraints.yaml` `testing.integration_deadline_from_case_budget.blind_spots`.
-- Pre-commit hooks are local and skippable; CI and branch protection are the authoritative layer. Naming and commitlint have that CI layer over the PR range (`pnpm lint:pr`), never over history before the PR's base.
-- Claude Code write-time hooks are not installed: `.claude/` is untracked local tooling.
+Known blind spots handed to review: `scripts/README.md` § Enforcement blind spots.

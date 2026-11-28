@@ -11,7 +11,7 @@ updates:
     ignore:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
-      # React 18 is the stack pin (AGENTS.md Stack & Versions); a React major is a design change.
+      # React 18 is the stack pin (platform/AGENTS.md Stack & Versions); a React major is a design change.
       - dependency-name: "react"
         update-types: ["version-update:semver-major"]
       - dependency-name: "react-dom"

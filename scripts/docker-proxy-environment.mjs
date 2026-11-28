@@ -86,8 +86,11 @@ export function readPrivateJsonFile(path, uid) {
   return selected;
 }
 
-/** @param {number} uid */
-function hostProxyEnvironment(uid) {
+/**
+ * The trusted host's private proxy fields (absent file: none). Values may carry credentials.
+ * @param {number} uid
+ */
+export function hostProxyEnvironment(uid) {
   let file;
   try {
     file = readPrivateJsonFile(join(homedir(), '.config/dsh-team/docker-proxy.json'), uid);

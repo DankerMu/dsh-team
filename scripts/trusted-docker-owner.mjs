@@ -8,7 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { liveProcessBirth, processBirth, processIdentity } from './probe-browser-native.mjs';
 import { writeReceipt } from './probe-browser-receipt.mjs';
 import { dockerProxyEnvironment } from './docker-proxy-environment.mjs';
-import { capturePrivateOutput } from './trusted-docker-output.mjs';
+import { capturePrivateOutput, proxyOutputSecrets } from './trusted-docker-output.mjs';
 import { retireCancelledJournal } from './trusted-docker-retirement.mjs';
 import {
   assessTrustedDockerCleanup,
@@ -48,21 +48,7 @@ function runtimeEnvironment(extra = {}) {
 }
 
 function outputSecrets() {
-  const values = Object.values(dockerProxyEnvironment()).filter((value) => value.length > 0);
-  const secrets = [...values];
-  for (const value of values) {
-    try {
-      const url = new URL(value);
-      const username = decodeURIComponent(url.username);
-      const password = decodeURIComponent(url.password);
-      secrets.push(url.username, url.password, username, password);
-      if (username || password)
-        secrets.push(Buffer.from(`${username}:${password}`).toString('base64'));
-    } catch {
-      // Non-URL proxy inputs still retain their exact transport semantics and whole-value exclusion.
-    }
-  }
-  return secrets;
+  return proxyOutputSecrets(dockerProxyEnvironment());
 }
 
 async function waitForPublication(read, ended = () => false) {
