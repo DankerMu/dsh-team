@@ -20,6 +20,9 @@ import { buildFailureDiagnostic } from './docker-build-diagnostics.mjs';
 import { prepareVerificationImage } from './verification-image.mjs';
 import { runDockerCommand, selectDockerExecution } from './docker-command.mjs';
 
+/** The pinned CfT headless-shell version; the parent-side VPS lane derives its toolchain from it. */
+export const CHROME_VERSION = '156.0.8078.80';
+const CHROME_REQUIRED = `CHROME_BIN must select pinned CfT ${CHROME_VERSION} chrome-headless-shell`;
 const root = fileURLToPath(new URL('../', import.meta.url));
 // Vitest runs directly under this Node, so signals reach it and its own exit becomes the result.
 const vitest = join(root, 'node_modules/vitest/vitest.mjs');
@@ -175,8 +178,7 @@ async function prepare() {
     daemon.SecurityOptions?.some((value) => /rootless|userns/.test(value))
   )
     throw new Error('browser isolation requires qualified local Linux Docker UID mapping');
-  if (!process.env.CHROME_BIN)
-    throw new Error('CHROME_BIN must select pinned CfT 156.0.8078.80 chrome-headless-shell');
+  if (!process.env.CHROME_BIN) throw new Error(CHROME_REQUIRED);
   const bin = await realpath(process.env.CHROME_BIN);
   if (!bin.endsWith('/chrome-headless-shell'))
     throw new Error(
@@ -267,7 +269,7 @@ async function prepare() {
     invocation,
     imageId,
     base: 'sha256:a81a03dd965b4052269a57fac857004022b522a4bf06e7a739e25e18bce45af2',
-    chromeVersion: '156.0.8078.80',
+    chromeVersion: CHROME_VERSION,
     chromeSha256: sha256,
     uid: process.getuid(),
     gid: process.getgid(),
@@ -275,7 +277,7 @@ async function prepare() {
   };
   await writeFile(join(directory, 'runtime.json'), JSON.stringify(identities), { mode: 0o600 });
   process.stdout.write(
-    `browser runtime image=${imageId} Chrome=156.0.8078.80 sha256=${sha256} receipt=${join(directory, 'runtime.json')}\n`,
+    `browser runtime image=${imageId} Chrome=${CHROME_VERSION} sha256=${sha256} receipt=${join(directory, 'runtime.json')}\n`,
   );
   const env = {
     ...process.env,
@@ -288,19 +290,6 @@ async function prepare() {
     DSH_TEAM_BROWSER_INVOCATION: invocation,
   };
   status = await runVerificationChild(env);
-}
-for (const [signal, code] of [
-  ['SIGINT', 130],
-  ['SIGTERM', 143],
-]) {
-  // A repeated signal must not end the driver wait or cleanup with the default disposition.
-  process.on(signal, () => {
-    if (!interrupted) {
-      interrupted = true;
-      status = code;
-    }
-    child?.kill(signal);
-  });
 }
 async function rescueRegistration(name) {
   const pointerPath = join(directory, name);
@@ -388,38 +377,60 @@ async function persistQualificationFailure(error) {
   }
 }
 
-try {
-  if (process.argv[2] === 'model' && !process.env.DMXAPI_KEY?.trim())
-    throw new Error('DMXAPI_KEY is required for real-model verification');
-  if (command && forwardedArguments.some((value) => value === '--help' || value === '-h'))
-    status = await runVerificationChild(process.env);
-  else await prepare();
-} catch (error) {
-  if (qualificationEvidence) await persistQualificationFailure(error);
-  if (imageFailure && (await publishImageReceipt()))
-    process.stderr.write(`browser image build failed; receipt=${join(directory, 'image.json')}\n`);
-  const known = [
-    'usage: verify-browser-runtime.mjs docker|model|dsh-api|first-run',
-    'DMXAPI_KEY is required for real-model verification',
-    'Trusted host Docker proxy configuration invalid',
-    'browser isolation requires trusted nonroot Linux amd64',
-    'browser isolation requires the local default Docker daemon',
-    'browser isolation requires qualified local Linux Docker UID mapping',
-    'CHROME_BIN must select pinned CfT 156.0.8078.80 chrome-headless-shell',
-    'browser isolation requires the complete pinned CfT headless-shell distribution',
-    'browser runtime provisioning failed',
-    'browser runtime immutable image ID missing',
-    'browser image evidence unavailable',
-    'browser runtime invocation interrupted',
-    'Verification image artifact input rejected',
-    'Verification image artifact identity mismatch',
-  ];
-  process.stderr.write(
-    `${known.includes(error.message) ? error.message : 'browser runtime invocation failed; inspect private lifecycle receipts'}\n`,
-  );
-  if (!interrupted) status = 1;
-} finally {
-  await cleanup();
+function trapSignals() {
+  for (const [signal, code] of [
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ]) {
+    // A repeated signal must not end the driver wait or cleanup with the default disposition.
+    process.on(signal, () => {
+      if (!interrupted) {
+        interrupted = true;
+        status = code;
+      }
+      child?.kill(signal);
+    });
+  }
 }
-// Runtime identities and bounded lifecycle receipts intentionally remain durable.
-process.exitCode = status;
+
+// Importing this module (for CHROME_VERSION) must not provision, trap signals or set an exit code.
+if (import.meta.main) {
+  trapSignals();
+  try {
+    if (process.argv[2] === 'model' && !process.env.DMXAPI_KEY?.trim())
+      throw new Error('DMXAPI_KEY is required for real-model verification');
+    if (command && forwardedArguments.some((value) => value === '--help' || value === '-h'))
+      status = await runVerificationChild(process.env);
+    else await prepare();
+  } catch (error) {
+    if (qualificationEvidence) await persistQualificationFailure(error);
+    if (imageFailure && (await publishImageReceipt()))
+      process.stderr.write(
+        `browser image build failed; receipt=${join(directory, 'image.json')}\n`,
+      );
+    const known = [
+      'usage: verify-browser-runtime.mjs docker|model|dsh-api|first-run',
+      'DMXAPI_KEY is required for real-model verification',
+      'Trusted host Docker proxy configuration invalid',
+      'browser isolation requires trusted nonroot Linux amd64',
+      'browser isolation requires the local default Docker daemon',
+      'browser isolation requires qualified local Linux Docker UID mapping',
+      CHROME_REQUIRED,
+      'browser isolation requires the complete pinned CfT headless-shell distribution',
+      'browser runtime provisioning failed',
+      'browser runtime immutable image ID missing',
+      'browser image evidence unavailable',
+      'browser runtime invocation interrupted',
+      'Verification image artifact input rejected',
+      'Verification image artifact identity mismatch',
+    ];
+    process.stderr.write(
+      `${known.includes(error.message) ? error.message : 'browser runtime invocation failed; inspect private lifecycle receipts'}\n`,
+    );
+    if (!interrupted) status = 1;
+  } finally {
+    await cleanup();
+  }
+  // Runtime identities and bounded lifecycle receipts intentionally remain durable.
+  process.exitCode = status;
+}

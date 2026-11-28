@@ -78,6 +78,64 @@ Status and cancellation perform one authoritative terminal reread after confirme
 
 Cleanup assessment is read-only: it requires canonical browser driver and settled-producer identities, started-browser socket authority and strict invocation-descendant paths before reporting retirement. A legitimate never-started registration does not invent producer/socket identities. Live or uncertain producers, malformed journal/receipt evidence, failed exact inspections and nonempty owned inventories remain unconfirmed. A denied group observation preserves the original command exit/signal with an identity failure and unsettled scope rather than losing the terminal record. Actual output-file write failure records incomplete evidence and blocks partial-log delivery; complete-output fixtures also prove exact proxy transport with full, encoded, decoded and Basic credential forms excluded from both streams and receipts. Each shared-Engine `submitted` journal row from the test process's Docker CLI wrapper or the tracked Engine client's default submission carries a closed-set `call` label: transport `cli`/`http`, a fixed-vocabulary operation (CLI verb and known group subcommand, or HTTP method with an `{id}` endpoint template, otherwise `other`) and a caller basename (the issuing `*.test.ts` file from the call-time stack, else the tracked client's construction point; else the first non-wrapper `platform/test/` module; otherwise `unknown`), never arguments, names, IDs, queries or paths. Deployed-observer, binding/participant, browser exec and direct no-argument rows stay unlabelled; older unlabelled rows remain valid, any other label shape is malformed evidence, and labels never change settlement. When cleanup is unconfirmed because submissions stayed unsettled or kept a pending marker, the terminal `cleanup.unsettled` projection lists each distinct label with its count (at most 32 in journal order, `truncated` when more exist) and counts unlabelled rows, marker-only reservations and unattributable pending names under `unlabelled`; it carries no identifiers, arguments or paths, is absent when cleanup is confirmed, and never changes the verdict. Root cause stays UNKNOWN until the projection or other retained evidence names the call site.
 
+## Parent-side VPS lane
+
+Only the trusted parent session runs these, after full review of the exact commit (#769). `pnpm --silent verify:docker` above remains the VPS side; this is the parent side around it.
+
+- `pnpm lane:vps <label> <sha> <branch>` runs the exact-head lane. `<label>` matches `^[a-z0-9][a-z0-9-]{0,39}$` and `<sha>` is 40 lowercase hex characters. Both are checked before any local write or remote command.
+- `pnpm lane:vps:post <pr> <label> [--note <text>]` publishes a passed lane on that PR.
+
+Prerequisites: the `giap-vps` SSH alias (the only host), local Docker Buildx for linux/amd64, `gh` authenticated as the evidence gate's login, and the remote toolchain below the SSH session's `$HOME` at `T=~/.local/share/dsh-team/toolchain`. The lane derives each path from the pins at `<sha>`: Node `T/node-v<node>-linux-x64/bin` and pnpm `T/pnpm-<pnpm>/node_modules/.bin` from `.tool-versions`, hurl `T/hurl-<hurl>/usr/bin` from `HURL_VERSION` in `.github/workflows/ci.yml`, and Chrome `T/chrome-<chrome>/chrome-headless-shell-linux64/chrome-headless-shell` from `CHROME_VERSION` in `scripts/verify-browser-runtime.mjs`. A missing pin or remote entry is refused by name before any build or upload.
+
+The run, in order:
+
+1. Checks that `<branch>` is at `<sha>`, then claims `.run/vps-lane/<label>/` with a non-recursive `mkdir`.
+2. Builds the platform, user and browser images from `git archive <sha>` under umask 022, tagged and labelled with a fresh run ID. The browser context holds exactly the files its Dockerfile copies `--from=browser-runtime`. A context file missing from `scripts/`, a build input not readable by others, or a saved layer with the wrong mode is refused before upload. The modes checked are the platform migrations directory and files, the platform's catalog and the browser probe. Every path removes this run's own local image tags.
+3. Uploads a `git bundle` of `<branch>`, the three OCI archives, `lane.json` and the helpers `vps-lane-remote.mjs` and `docker-proxy-environment.mjs`, plus a sha256 for each, to a fresh staging directory `~/.local/share/dsh-team/verify/<label>-<random>`.
+4. Remote prepare re-hashes every upload and refuses a mismatch. It checks out `<sha>` from the bundle, extracts private OCI layouts, writes the owned 0600 `images.json` (`roles.user|platform|browser`) and records the before host snapshot.
+5. Runs `pnpm install --frozen-lockfile` and `pnpm build` in a transient systemd user unit (`--collect`, `sg docker`).
+6. Starts custody `pnpm --silent verify:docker start <sha>` with `DSH_TEAM_VERIFICATION_IMAGES` set to that `images.json`, holding one observing SSH session open. It then polls `status` until a non-running state and fetches `logs <invocation> stdout`.
+7. Unless custody stayed unknown, runs `pnpm test:deploy` in a second user unit and records the after host snapshot.
+
+A status query that fails over SSH, or returns no parseable `state`, is a transport failure. It is retried every 60 s; after 120 consecutive failures the custody state is recorded as UNKNOWN and the lane exits non-zero. Unit-state polls, evidence reads and the fence use the same bound, but count only transport failures there (ssh exit 255, a timeout); any other non-zero exit is the remote's answer, recorded once and not retried. Custody `running` is polled every 180 s without counting as a failure. `DSH_TEAM_LANE_INTERVAL_MS` replaces every interval, never the bound; it exists only for the integration test.
+
+Evidence files in the gitignored `.run/vps-lane/<label>/`:
+
+- `summary.json` holds the raw facts: state, failure step, images, remote staging root, step exits, custody status fields, stdout digests, deploy exit and both host snapshots. `summary.txt` is its human companion.
+- `custody-status.json` and `custody-stdout.log`, from custody's `status` and `logs`.
+- `test-deploy.log`, plus `host-before.json` and `host-after.json`.
+
+Label reuse: a failure before the first remote write (pins, toolchain, build) removes the whole run directory, so the same label can start again. From the remote staging `mkdir` on, the directory and its `summary.json` stay. Any existing run directory, whether live, completed or failed after upload, refuses the label; use a new one.
+
+Pass criteria. `lane:vps` exits 0, and `lane:vps:post` publishes, only when all of the following hold. Post recomputes them from the raw facts in `summary.json` and never trusts a stored verdict.
+
+- `lane-state`: the run reached `completed`.
+- `custody-state`: custody reported `passed`.
+- `custody-head`: custody's `head` is the lane sha.
+- `custody-cleanup`: custody cleanup is `confirmed`.
+- `custody-stdout`: the fetched stdout's sha256 equals the status `output.stdout.sha256`.
+- `deploy-exit`: `pnpm test:deploy` exited 0.
+- `fence-registered-targets`: every target in custody's `resources.jsonl` and in the deploy journal is absent (custody's journal must exist).
+- `fence-owned-leftovers`: no `dsh-team`/`dsh-browser` container, volume, network or image, no `dsh-team.test-run` labelled image, and no active `dsh-team-*` user unit remain.
+- `fence-daemon-pid`: the Docker daemon PID is unchanged.
+- `fence-docker0`: `docker0` is unchanged.
+- `fence-foreign-containers`: the foreign containers are unchanged.
+
+Post refuses, naming the failed criterion, before any write. It also refuses, before any write, a PR head other than the summary head, a `gh` identity the evidence gate (`platform/test/docker-evidence.ts`) would not accept, or a body without exactly one `## Runtime evidence` followed by one `## Risk`. The writes then run in order:
+
+1. One `dsh-team/docker` success status on the head.
+2. The `## Runtime evidence` section, up to `## Risk`, replaced with deterministic text built from the summary. Other sections stay byte-identical, and an unchanged section is not re-edited.
+3. `gh run rerun --failed` for that head's runs whose conclusion is `failure`.
+
+A failure after the status POST exits non-zero and names the completed steps, for example `status posted, body not updated`. Rerunning post completes what is left and posts exactly one more status, since the gate reads only the newest.
+
+Boundaries:
+
+- Host observation is read-only: `systemctl show`, `ip -j link`, `docker ps|ls|inspect`.
+- The lane never deletes, stops or cancels a remote resource. Staging directories under `~/.local/share/dsh-team/verify/` stay for the operator, and custody keeps sole ownership of its cleanup. The only removals are local: this run's own image tags and its local build directory.
+- The docker-proxy fields are read on the host through `docker-proxy-environment.mjs` into the unit and custody environments, never into argv, logs or the summary.
+- The lane never uses `--no-verify`, admin bypass or a skipped check. It does not change custody, CI workflows or `pnpm verify:docker-evidence`.
+
 ## DSH browser runtime, images and verification-host prerequisites
 
 The DSH browser lane (`pnpm test:docker`, `pnpm test:model`, `pnpm probe:dsh-api`, `pnpm probe:first-run`) requires trusted Linux amd64, a nonroot driver and the local default Docker daemon with ordinary UID mapping and support for `com.docker.network.bridge.gateway_mode_ipv4=isolated`. Rootless/userns Docker, remote Docker contexts and unqualified Docker Desktop namespace/Unix-socket sharing are unsupported, not reasons to fall back. `CHROME_BIN` must select the executable inside the complete pinned CfT156.0.8078.80 `chrome-headless-shell-linux64` distribution, not an arbitrary browser or PATH lookup. Root commands provision and qualify `images/browser-verification` once per invocation, outside navigation budgets, capture immutable image/Chrome identities, and provide Debian open-licensed CJK fonts without host font/library mounts or production-image changes.

@@ -99,6 +99,7 @@ All commands route through the root `package.json` scripts. Do not invent ad-hoc
 - HTTP contract: `pnpm contract:write` regenerates `schemas/openapi.json`.
 - Browser and CLI lanes: `pnpm test:ui:install` then `pnpm test:ui`; `pnpm test:cli`; administrator command `pnpm --silent cli admin create <email>`.
 - Trusted giap-vps lanes: `pnpm test:docker` (user image), `pnpm test:deploy` (Compose), `pnpm test:model` (real model), `pnpm --silent verify:docker start <reviewed-sha>` (durable Docker owner).
+- Parent-side exact-head VPS lane: `pnpm lane:vps <label> <sha> <branch>`, then `pnpm lane:vps:post <pr> <label>` (`scripts/README.md` § Parent-side VPS lane).
 - Local full stack: `pnpm seed:stack` seeds the local RAGFlow stack; `pnpm test:stack` runs the lane.
 - CI gates: `pnpm verify:docker-evidence` (Docker evidence), `pnpm lint:ci` (event concurrency), `pnpm lint:pr <base> <head>` (PR commit messages and added paths).
 
