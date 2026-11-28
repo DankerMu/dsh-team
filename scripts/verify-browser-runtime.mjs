@@ -393,7 +393,7 @@ function trapSignals() {
   }
 }
 
-// Importing this module (for CHROME_VERSION) must not provision, trap signals or set an exit code.
+// CHROME_VERSION stays importable: importing must not provision, trap signals or set an exit code.
 if (import.meta.main) {
   trapSignals();
   try {

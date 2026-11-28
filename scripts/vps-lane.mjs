@@ -322,7 +322,6 @@ async function runUnit(lane, kind, steps) {
   log(`remote ${steps.join('+')} in user unit ${name}`);
   const started = ssh(remote(lane, 'unit', lane.remoteRoot, lane.sha, name, ...steps));
   // A transport failure may follow a started unit; its deterministic name is polled either way.
-  // A unit that never started reads as `dead` and leaves no exit record.
   if (started.status !== 0 && !transport(started))
     return { reason: `unit not started: ${tail(started.stderr)}` };
   if (started.status !== 0) log(`unit ${name} start unconfirmed, polling: ${tail(started.stderr)}`);
@@ -344,6 +343,13 @@ async function runUnit(lane, kind, steps) {
     .filter(Boolean)
     .map((row) => JSON.parse(row));
   lane.summary.steps = rows ?? lane.summary.steps;
+  // An unregistered unit reads `dead` too: after an unconfirmed start, no row of its own means it
+  // may not have started yet, not that it finished.
+  if (started.status !== 0 && !rows?.some((row) => steps.includes(row.step)))
+    return {
+      reason: `unit ${name} state UNKNOWN: start unconfirmed, no step record`,
+      unknown: true,
+    };
   return { rows: rows ?? [] };
 }
 

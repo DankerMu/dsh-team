@@ -508,7 +508,7 @@ it(
 );
 
 it(
-  'ends with no exit record, not a hang, when a transport failure kept the unit from starting',
+  'fails closed with the unit state UNKNOWN, not a hang, when a transport failure kept the unit from starting',
   async () => {
     const lane = await fixture();
     await writeFile(join(lane.state, 'ssh-fail'), "1 'install' 'build'");
@@ -518,9 +518,31 @@ it(
     expect(result.status).not.toBe(0);
     expect(summary(lane, 'neverstarted')).toMatchObject({
       state: 'failed',
-      failure: { step: 'install', reason: 'no exit record' },
+      failure: {
+        step: 'install',
+        reason: expect.stringContaining('UNKNOWN: start unconfirmed, no step record') as string,
+      },
     });
     expect(pnpmCalls(lane, 'install')).toBe(false);
+  },
+  CASE_MS,
+);
+
+it(
+  'issues no host fence when the deploy unit start was unconfirmed and the unit never ran',
+  async () => {
+    const lane = await fixture();
+    await writeFile(join(lane.state, 'ssh-fail'), "1 'test:deploy'");
+
+    const result = await run(lane, 'unregistered');
+
+    expect(result.status).not.toBe(0);
+    const recorded = summary(lane, 'unregistered');
+    expect(recorded.failed).toEqual(expect.arrayContaining(['deploy-exit', 'fence-snapshot']));
+    expect(recorded.deploy?.reason).toContain('UNKNOWN: start unconfirmed, no step record');
+    expect(pnpmCalls(lane, 'test-deploy')).toBe(false);
+    expect(sshCommands(lane).some((command) => command.includes("mjs' fence "))).toBe(false);
+    expectNoRemoteMutation(lane);
   },
   CASE_MS,
 );
@@ -566,6 +588,7 @@ it(
       expect(text).not.toContain(lane.secret);
       expect(text).toContain('[REDACTED]');
       expect(text).toContain('Tests  9 passed (9)');
+      expect(text).toContain('auth [REDACTED] rejected');
     }
   },
   CASE_MS,
