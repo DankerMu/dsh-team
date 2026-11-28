@@ -130,6 +130,7 @@ function pnpm() {
       appendFileSync(journal, `${JSON.stringify({ runId: 'd', target })}\n`);
   save(`pnpm-${step.replace(':', '-')}-env.json`, Object.keys(process.env).sort());
   out(scenario.output?.[step] ?? `${step} done\n`);
+  process.stderr.write(scenario.errput?.[step] ?? '');
   process.exitCode = scenario.exits?.[step] ?? 0;
   return undefined;
 }

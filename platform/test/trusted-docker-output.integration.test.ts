@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
+import { proxyOutputSecrets } from '../../scripts/trusted-docker-output.mjs';
 import { FILE_SIZE_LIMIT_PROGRAM } from './trusted-docker-fixture.ts';
 
 const moduleUrl = new URL('../../scripts/trusted-docker-output.mjs', import.meta.url).href;
@@ -126,4 +127,32 @@ it('does not return a complete receipt when the actual output file reaches its w
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+it('derives every proxy credential form custody and the lane redact, from whole values', () => {
+  const secrets = proxyOutputSecrets({
+    HTTP_PROXY: 'http://us%40er:p%3Ass@127.0.0.1:9/',
+    HTTPS_PROXY: '',
+    NO_PROXY: 'localhost,.internal',
+  });
+
+  expect(secrets).toEqual([
+    'http://us%40er:p%3Ass@127.0.0.1:9/',
+    'localhost,.internal',
+    'us%40er',
+    'p%3Ass',
+    'us@er',
+    'p:ss',
+    Buffer.from('us@er:p:ss').toString('base64'),
+  ]);
+});
+
+it('adds no Basic token for a proxy URL without user or password', () => {
+  expect(proxyOutputSecrets({ HTTP_PROXY: 'http://127.0.0.1:3128' })).toEqual([
+    'http://127.0.0.1:3128',
+    '',
+    '',
+    '',
+    '',
+  ]);
 });

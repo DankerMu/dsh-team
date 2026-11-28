@@ -1,7 +1,8 @@
 // Remote half of the parent-side VPS lane (`pnpm lane:vps`, scripts/vps-lane.mjs). The lane
-// uploads this file and docker-proxy-environment.mjs into its private staging directory <R> and
-// runs it with the pinned toolchain Node. It observes the host read-only and never removes,
-// stops or cancels anything; proxy fields are loaded here and never printed or put in argv.
+// uploads this file, docker-proxy-environment.mjs and trusted-docker-output.mjs into its private
+// staging directory <R> and runs it with the pinned toolchain Node. It observes the host read-only
+// and never removes, stops or cancels anything; proxy fields are loaded here, never printed or
+// put in argv, and redacted from every step log.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -12,7 +13,6 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  openSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
@@ -20,6 +20,7 @@ import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { hostProxyEnvironment } from './docker-proxy-environment.mjs';
+import { capturePrivateOutput, proxyOutputSecrets } from './trusted-docker-output.mjs';
 
 const ROLES = ['user', 'platform', 'browser'];
 const STEPS = {
@@ -29,7 +30,7 @@ const STEPS = {
 };
 const INVENTORY = ['containers', 'volumes', 'networks', 'images', 'labelledImages', 'activeUnits'];
 const SHA = /^[a-f0-9]{40}$/;
-const INVOCATION = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+export const INVOCATION = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const UNIT = /^dsh-team-lane-[a-z0-9-]{1,80}$/;
 const OUTPUT_LIMIT = 64 * 1024 * 1024;
 
@@ -279,19 +280,34 @@ function fence(root, invocation) {
   );
 }
 
+/** One pnpm step, stdout and stderr in one pipe, written to `path` with the secrets redacted. */
+async function runStep(pnpm, args, options, path, secrets) {
+  const child = spawn('/bin/sh', ['-c', 'exec "$0" "$@" 2>&1', pnpm, ...args], {
+    ...options,
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  const closed = new Promise((resolve) => {
+    child.once('error', () => resolve({ status: null, signal: null }));
+    child.once('close', (status, signal) => resolve({ status, signal }));
+  });
+  const [, result] = await Promise.all([capturePrivateOutput(child.stdout, path, secrets), closed]);
+  return result;
+}
+
 /** Runs inside the systemd user unit; records one steps.jsonl row per step. */
-function steps(root, names) {
+async function steps(root, names) {
   const { pnpm } = toolchain(root);
-  const environment = { ...toolEnvironment(root), ...hostProxyEnvironment(process.getuid()) };
+  const proxy = hostProxyEnvironment(process.getuid());
+  const environment = { ...toolEnvironment(root), ...proxy };
   for (const step of names) {
     const file = stepFile(step);
-    const log = openSync(join(root, `${file}.log`), 'w', 0o600);
     const started = Date.now();
-    const result = spawnSync(pnpm, STEPS[step], {
+    const options = {
       cwd: join(root, 'source'),
       env: { ...environment, DSH_TEAM_CI_RESOURCE_JOURNAL: join(root, `${file}-resources.jsonl`) },
-      stdio: ['ignore', log, log],
-    });
+    };
+    const log = join(root, `${file}.log`);
+    const result = await runStep(pnpm, STEPS[step], options, log, proxyOutputSecrets(proxy));
     const seconds = Math.round((Date.now() - started) / 1000);
     const row = { step, exit: result.status, signal: result.signal, seconds };
     appendFileSync(join(root, 'steps.jsonl'), `${JSON.stringify(row)}\n`, { mode: 0o600 });

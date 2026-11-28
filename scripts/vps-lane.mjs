@@ -20,7 +20,6 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { CHROME_VERSION } from './verify-browser-runtime.mjs';
 import { buildImages } from './vps-lane-build.mjs';
 import { postLane } from './vps-lane-post.mjs';
 import {
@@ -37,13 +36,18 @@ import {
   vitestCounts,
   writeSummary,
 } from './vps-lane-record.mjs';
-import { shellQuote as q, sha256File } from './vps-lane-remote.mjs';
+import { INVOCATION, shellQuote as q, sha256File } from './vps-lane-remote.mjs';
 
 const USAGE = 'usage: pnpm lane:vps <label> <sha> <branch>';
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 const SSH = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-o', 'ServerAliveInterval=30'];
 const TOOLCHAIN = '.local/share/dsh-team/toolchain';
-const HELPERS = ['vps-lane-remote.mjs', 'docker-proxy-environment.mjs'];
+// Lane tooling from this checkout, not from <sha>; the remote helper imports the other two.
+const HELPERS = [
+  'vps-lane-remote.mjs',
+  'docker-proxy-environment.mjs',
+  'trusted-docker-output.mjs',
+];
 const UPLOADS = [
   'source.bundle',
   'user-image.tar',
@@ -53,6 +57,7 @@ const UPLOADS = [
   ...HELPERS,
 ];
 // Seconds between attempts. DSH_TEAM_LANE_INTERVAL_MS replaces every interval (tests only).
+const INTERVAL_OVERRIDE = 'DSH_TEAM_LANE_INTERVAL_MS';
 const RETRY_S = 60;
 const STATUS_S = 180;
 const UNIT_S = 60;
@@ -61,9 +66,14 @@ const ATTEMPTS = 120;
 // Custody start returns within its own 60 s admission plus SSH setup.
 const LAUNCH_MS = 300_000;
 const OBSERVER_CLOSE_MS = 30_000;
+// One short SSH query. DSH_TEAM_LANE_QUERY_MS replaces it (tests only).
 const SSH_MS = 120_000;
+const QUERY_OVERRIDE = 'DSH_TEAM_LANE_QUERY_MS';
 // Hashing, cloning and extracting the uploaded images on the host.
 const PREPARE_MS = 3_600_000;
+// The read-only fence inspects every registered target in turn (each bounded at 60 s on the
+// host); about a thousand targets outlast one query, so the fence gets the prepare order bound.
+const FENCE_MS = 3_600_000;
 const TRANSFER_MS = 10_800_000;
 const UNIT_DONE = new Set(['dead', 'exited', 'failed']);
 
@@ -80,13 +90,15 @@ function stop(step, reason) {
   return Object.assign(new LaneRefusal(`${step} failed: ${reason}`), { step, reason });
 }
 
-function intervalOverride() {
-  const value = process.env.DSH_TEAM_LANE_INTERVAL_MS;
+/** A test-only millisecond override from the environment; undefined when unset. */
+function override(name) {
+  const value = process.env[name];
   if (value === undefined) return undefined;
   if (!/^[1-9][0-9]{0,5}$/.test(value))
-    throw new LaneRefusal('DSH_TEAM_LANE_INTERVAL_MS must be 1-999999 milliseconds', 2);
+    throw new LaneRefusal(`${name} must be 1-999999 milliseconds`, 2);
   return Number(value);
 }
+const queryMs = () => override(QUERY_OVERRIDE) ?? SSH_MS;
 
 function readPins(root, sha) {
   const show = (path) =>
@@ -99,6 +111,7 @@ function readPins(root, sha) {
   };
   const versions = show('.tool-versions');
   const ci = show('.github/workflows/ci.yml');
+  const browser = 'scripts/verify-browser-runtime.mjs';
   return {
     node: pin(versions, /^nodejs[ \t]+(\S+)[ \t]*$/m, 'nodejs', '.tool-versions'),
     pnpm: pin(versions, /^pnpm[ \t]+(\S+)[ \t]*$/m, 'pnpm', '.tool-versions'),
@@ -108,7 +121,12 @@ function readPins(root, sha) {
       'HURL_VERSION',
       '.github/workflows/ci.yml',
     ),
-    chrome: CHROME_VERSION,
+    chrome: pin(
+      show(browser),
+      /^export const CHROME_VERSION = '([^']+)';$/m,
+      'CHROME_VERSION',
+      browser,
+    ),
   };
 }
 
@@ -131,7 +149,8 @@ function admit(args) {
     branch.startsWith('-')
   )
     throw new LaneRefusal(USAGE, 2);
-  const interval = intervalOverride();
+  const interval = override(INTERVAL_OVERRIDE);
+  queryMs(); // refuses a malformed query override before any write
   const root = repositoryRoot();
   const dir = runDirectory(root, label);
   if (existsSync(dir))
@@ -170,7 +189,7 @@ const ssh = (command, options = {}) =>
   spawnSync('ssh', [...SSH, HOST, command], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
-    timeout: SSH_MS,
+    timeout: queryMs(),
     ...options,
   });
 const remote = (lane, operation, ...args) =>
@@ -302,7 +321,11 @@ async function runUnit(lane, kind, steps) {
   const name = `dsh-team-lane-${lane.label}-${kind}-${randomBytes(3).toString('hex')}`;
   log(`remote ${steps.join('+')} in user unit ${name}`);
   const started = ssh(remote(lane, 'unit', lane.remoteRoot, lane.sha, name, ...steps));
-  if (started.status !== 0) return { reason: `unit not started: ${tail(started.stderr)}` };
+  // A transport failure may follow a started unit; its deterministic name is polled either way.
+  // A unit that never started reads as `dead` and leaves no exit record.
+  if (started.status !== 0 && !transport(started))
+    return { reason: `unit not started: ${tail(started.stderr)}` };
+  if (started.status !== 0) log(`unit ${name} start unconfirmed, polling: ${tail(started.stderr)}`);
   const state = await poll(
     lane,
     `unit ${name} state query`,
@@ -315,7 +338,7 @@ async function runUnit(lane, kind, steps) {
     },
     UNIT_S,
   );
-  if (state === undefined) return { reason: `unit ${name} state UNKNOWN` };
+  if (state === undefined) return { reason: `unit ${name} state UNKNOWN`, unknown: true };
   const rows = (await fetchText(lane, 'steps.jsonl'))
     ?.split('\n')
     .filter(Boolean)
@@ -336,6 +359,7 @@ async function installAndBuild(lane) {
 
 async function launchCustody(lane) {
   log('start custody pnpm test:docker with one observing SSH');
+  const deadline = Date.now() + LAUNCH_MS;
   const child = spawn('ssh', [...SSH, HOST, remote(lane, 'launch', lane.remoteRoot, lane.sha)], {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -354,7 +378,31 @@ async function launchCustody(lane) {
     child.once('close', () => resolve(undefined));
     child.once('close', () => clearTimeout(timer));
   });
-  return { child, start, stderr: () => tail(stderr) };
+  return { child, start, deadline, stderr: () => tail(stderr) };
+}
+
+/**
+ * The start custody recorded on the host when the observing SSH ended without its ready line:
+ * the start object, null when the remote answered that none was recorded, or undefined when the
+ * host stayed unreachable. A lost connection is never a custody-start verdict by itself.
+ */
+async function recordedStart(lane, observer) {
+  const { child } = observer;
+  // After a transport loss the remote helper may still be inside custody start: let its bound pass.
+  if (child.exitCode === null || child.exitCode === 255)
+    await delay(lane.interval ?? Math.max(0, observer.deadline - Date.now()));
+  const text = await poll(lane, 'custody-start.json read', () => {
+    const result = ssh(`cat ${q(`${lane.remoteRoot}/custody-start.json`)}`);
+    if (result.status === 0) return { value: result.stdout };
+    return transport(result) ? miss(result) : { value: null };
+  });
+  if (text === null || text === undefined) return text;
+  try {
+    const start = JSON.parse(text);
+    return INVOCATION.test(start.invocation ?? '') ? start : null;
+  } catch {
+    return null;
+  }
 }
 
 async function closeObserver(child) {
@@ -410,22 +458,27 @@ async function fetchStdout(lane, invocation) {
 async function custody(lane) {
   const observer = await launchCustody(lane);
   try {
-    if (!observer.start) throw stop('custody-start', observer.stderr() || 'no ready line');
-    const invocation = observer.start.invocation;
-    lane.summary.custody = { invocation, state: 'running' };
+    // Without the ready line the observer is lost and the host's own start record decides.
+    const observed = observer.start ? {} : { observer: 'lost' };
+    const unknown = (reason) => {
+      lane.summary.custody = { ...observed, state: 'unknown', reason };
+      process.stderr.write(`lane:vps: ${reason}; state UNKNOWN, nothing removed\n`);
+      return false;
+    };
+    const start = observer.start ?? (await recordedStart(lane, observer));
+    if (start === undefined) return unknown('custody start unrecorded, host unreachable');
+    if (start === null) throw stop('custody-start', observer.stderr() || 'no ready line');
+    const invocation = start.invocation;
+    observed.invocation = invocation;
+    if (!observer.start) log('observing SSH lost; continuing with the recorded custody start');
+    lane.summary.custody = { ...observed, state: 'running' };
     save(lane);
     log(`custody invocation ${invocation}`);
     const status = await custodyStatus(lane, invocation);
-    if (status === undefined) {
-      lane.summary.custody = { invocation, state: 'unknown', reason: 'custody status unreachable' };
-      process.stderr.write(
-        'lane:vps: custody status unreachable; state UNKNOWN, nothing removed\n',
-      );
-      return false;
-    }
+    if (status === undefined) return unknown('custody status unreachable');
     writeFileSync(join(lane.dir, 'custody-status.json'), `${JSON.stringify(status, null, 2)}\n`);
     lane.summary.custody = {
-      invocation,
+      ...observed,
       state: status.state,
       head: status.head,
       cleanup: status.cleanup?.state,
@@ -446,7 +499,7 @@ async function custody(lane) {
 }
 
 async function deployAndFence(lane) {
-  const { rows, reason } = await runUnit(lane, 'deploy', ['test:deploy']);
+  const { rows, reason, unknown } = await runUnit(lane, 'deploy', ['test:deploy']);
   const row = rows?.find((candidate) => candidate.step === 'test:deploy');
   const text = await fetchText(lane, 'test-deploy.log');
   if (text !== undefined) writeFileSync(join(lane.dir, 'test-deploy.log'), text);
@@ -455,9 +508,18 @@ async function deployAndFence(lane) {
     reason: reason ?? null,
     tests: text ? vitestCounts(text) : null,
   };
+  if (unknown) {
+    // test:deploy may still be running: an after snapshot now would observe nothing settled.
+    process.stderr.write(
+      'lane:vps: test:deploy unit state UNKNOWN; no host fence, nothing removed\n',
+    );
+    return;
+  }
   log(`test:deploy exit ${String(lane.summary.deploy.exit)}; host fence`);
   const fence = await poll(lane, 'host fence observation', () => {
-    const result = ssh(remote(lane, 'fence', lane.remoteRoot, lane.summary.custody.invocation));
+    const result = ssh(remote(lane, 'fence', lane.remoteRoot, lane.summary.custody.invocation), {
+      timeout: FENCE_MS,
+    });
     if (result.status !== 0) return miss(result);
     try {
       const { before, after } = JSON.parse(result.stdout);

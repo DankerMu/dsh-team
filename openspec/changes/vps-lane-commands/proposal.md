@@ -40,12 +40,13 @@ Evidence floor: platform/test/vps-lane.integration.test.ts red then green; lint:
 Recorded after implementation, before review:
 
 1. Run directory lifetime: a run that fails before its first remote write (pin, toolchain, build) removes its run directory, so the label can be reused. From the remote staging `mkdir` on, the directory and `summary.json` stay, and any existing run directory refuses the label, including a run that failed after upload; such a run needs a new label.
-2. The custody observer runs as `systemd-run --user --collect` without `RemainAfterExit`, so no `systemctl stop` is needed. Not yet exercised on the real host.
+2. The install/build and `test:deploy` units run as `systemd-run --user --collect` without `RemainAfterExit`, so no `systemctl stop` is needed. Custody itself is started inside the held observing SSH session (`launch`), as issue #769 describes; its detached owner's survival of a dropped session depends on host logind policy and is checked in the real run (task 2.2).
 3. When custody does not reach a terminal state (unknown or unreachable), `test:deploy` and the after-fence are skipped and the run is not a pass.
 4. Retry classification: unit-state, evidence reads and fence retry only on ssh exit 255 or timeout; any other non-zero exit is a remote answer, recorded without retry. Custody status retries on every failure.
-5. `DSH_TEAM_LANE_INTERVAL_MS` (tests only) replaces the wait intervals; the 120-attempt bound is unchanged.
-6. Pin sources: Node, pnpm and hurl are read from `<sha>` with `git show`; Chrome is imported from the lane checkout's `scripts/verify-browser-runtime.mjs`.
+5. Test-only overrides: `DSH_TEAM_LANE_INTERVAL_MS` replaces the wait intervals and `DSH_TEAM_LANE_QUERY_MS` the 120 s per-query SSH bound; the 120-attempt bound is unchanged. The host fence has its own one-hour SSH bound (review round 1), since it inspects every registered target.
+6. Pin sources: Node, pnpm, hurl and Chrome are all read from `<sha>` with `git show` (Chrome from `CHROME_VERSION` in `scripts/verify-browser-runtime.mjs`, review round 1). The uploaded helpers (`vps-lane-remote.mjs`, `docker-proxy-environment.mjs`, `trusted-docker-output.mjs`) come from the running lane checkout: they are lane tooling, not the code under test.
 7. A post rerun reruns only runs whose conclusion is `failure`.
 8. The custody status field is `output.stdout.sha256` (the design said `output.sha256`).
 9. Dropped from the reference scripts: the private steps `TMPDIR`, the uid==1000 and arch assertions, `child.json` and the owner-live `/proc` check.
 10. Tests spawn `node scripts/vps-lane.mjs run|post` from the package-script string instead of through pnpm, so the git root is the temp repository rather than the real one.
+11. Start recovery (review round 1): when the observing SSH closes without a ready line, the lane reads `custody-start.json` and continues with its invocation, recording `custody.observer: lost`; only a remote answer that the file is absent is a custody-start failure. A transport failure on a unit start polls the deterministic unit name instead of giving up. A deploy unit whose state stays UNKNOWN skips the after-fence and is not a pass. Step logs are written through custody's redaction (`capturePrivateOutput`) with the proxy values as secrets.

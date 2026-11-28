@@ -35,7 +35,8 @@ const summary = (lane: Lane, label: string) =>
     failed: string[];
     remoteRoot: string;
     failure: { step: string; reason: string } | null;
-    custody: { state: string; invocation: string } | null;
+    custody: { state: string; invocation: string; observer?: string } | null;
+    deploy: { exit: number | null; reason: string | null } | null;
   };
 const tools = (lane: Lane, tool: string) => lane.calls().filter((call) => call.tool === tool);
 const sshCommands = (lane: Lane) => tools(lane, 'ssh').map((call) => call.args.at(-1) ?? '');
@@ -122,6 +123,38 @@ it(
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('pin missing: pnpm in .tool-versions');
     expect(lane.calls()).toEqual([]);
+  },
+  CASE_MS,
+);
+
+it(
+  'refuses a missing CHROME_VERSION pin at the sha, naming it, before any remote command',
+  async () => {
+    const lane = await fixture({ chromePin: null });
+
+    const result = await run(lane, 'pins');
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      'pin missing: CHROME_VERSION in scripts/verify-browser-runtime.mjs',
+    );
+    expect(lane.calls()).toEqual([]);
+  },
+  CASE_MS,
+);
+
+it(
+  'checks the remote Chrome path for the pin at the sha, not the lane checkout pin',
+  async () => {
+    const lane = await fixture({ chromePin: '151.0.7100.2' });
+
+    const result = await run(lane, 'chrome');
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      'remote toolchain missing: chrome (~/.local/share/dsh-team/toolchain/chrome-151.0.7100.2/',
+    );
+    expect(tools(lane, 'scp')).toEqual([]);
   },
   CASE_MS,
 );
@@ -374,6 +407,166 @@ it(
     );
     expect(summary(lane, 'answer').failed).toEqual(['custody-stdout']);
     expectNoRemoteMutation(lane);
+  },
+  CASE_MS,
+);
+
+it(
+  'gives the host fence its own bound, so a fence slower than a query is not retried',
+  async () => {
+    const lane = await fixture({ queryMs: '5000' });
+    await writeFile(join(lane.state, 'ssh-delay'), "7 mjs' fence ");
+
+    const result = await run(lane, 'slowfence');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('host fence observation failed');
+    expect(sshCommands(lane).filter((command) => command.includes("mjs' fence "))).toHaveLength(1);
+    expect(summary(lane, 'slowfence')).toMatchObject({ state: 'completed', failed: [] });
+  },
+  CASE_MS,
+);
+
+it(
+  'continues with the recorded custody invocation when the observing SSH drops after launch',
+  async () => {
+    const lane = await fixture();
+    await writeFile(join(lane.state, 'ssh-drop'), "mjs' launch ");
+
+    const result = await run(lane, 'dropped');
+
+    expect(result.status).toBe(0);
+    const recorded = summary(lane, 'dropped');
+    expect(recorded).toMatchObject({ state: 'completed', failed: [], failure: null });
+    expect(recorded.custody?.invocation).toBe(
+      readFileSync(join(lane.state, 'custody-started'), 'utf8'),
+    );
+    expect(recorded.custody?.observer).toBe('lost');
+    expect(sshCommands(lane).filter((command) => command.includes("mjs' launch "))).toHaveLength(1);
+    expectNoRemoteMutation(lane);
+  },
+  CASE_MS,
+);
+
+it(
+  'records custody UNKNOWN, not a custody-start failure, when the start record stays unreadable',
+  async () => {
+    const lane = await fixture();
+    await writeFile(join(lane.state, 'ssh-drop'), "mjs' launch ");
+    await writeFile(join(lane.state, 'ssh-fail'), '100000 custody-start.json');
+
+    const result = await run(lane, 'unread');
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('state UNKNOWN, nothing removed');
+    const recorded = summary(lane, 'unread');
+    expect(recorded.failure).toBeNull();
+    expect(recorded.custody).toMatchObject({ state: 'unknown', observer: 'lost' });
+    expect(recorded.failed).toContain('custody-state');
+    expect(pnpmCalls(lane, 'test-deploy')).toBe(false);
+    expectNoRemoteMutation(lane);
+  },
+  CASE_MS,
+);
+
+it(
+  'records custody-start failed when the launch SSH fails and no start was recorded',
+  async () => {
+    const lane = await fixture();
+    await writeFile(join(lane.state, 'ssh-fail'), "1 mjs' launch ");
+
+    const result = await run(lane, 'nostart');
+
+    expect(result.status).not.toBe(0);
+    expect(summary(lane, 'nostart')).toMatchObject({
+      state: 'failed',
+      failure: { step: 'custody-start' },
+    });
+    expect(existsSync(join(lane.state, 'custody-started'))).toBe(false);
+    expectNoRemoteMutation(lane);
+  },
+  CASE_MS,
+);
+
+it(
+  'polls the deploy unit it started when the start SSH drops after the remote command ran',
+  async () => {
+    const lane = await fixture();
+    await writeFile(join(lane.state, 'ssh-drop'), "'test:deploy'");
+
+    const result = await run(lane, 'deploydrop');
+
+    expect(result.status).toBe(0);
+    expect(summary(lane, 'deploydrop')).toMatchObject({
+      state: 'completed',
+      failed: [],
+      deploy: { exit: 0, reason: null },
+    });
+    expect(pnpmCalls(lane, 'test-deploy')).toBe(true);
+  },
+  CASE_MS,
+);
+
+it(
+  'ends with no exit record, not a hang, when a transport failure kept the unit from starting',
+  async () => {
+    const lane = await fixture();
+    await writeFile(join(lane.state, 'ssh-fail'), "1 'install' 'build'");
+
+    const result = await run(lane, 'neverstarted');
+
+    expect(result.status).not.toBe(0);
+    expect(summary(lane, 'neverstarted')).toMatchObject({
+      state: 'failed',
+      failure: { step: 'install', reason: 'no exit record' },
+    });
+    expect(pnpmCalls(lane, 'install')).toBe(false);
+  },
+  CASE_MS,
+);
+
+it(
+  'issues no host fence while the deploy unit state is UNKNOWN, and is not a pass',
+  async () => {
+    const lane = await fixture();
+    await writeFile(join(lane.state, 'ssh-fail'), "100000 unit-state 'dsh-team-lane-stuck-deploy-");
+
+    const result = await run(lane, 'stuck');
+
+    expect(result.status).not.toBe(0);
+    const recorded = summary(lane, 'stuck');
+    expect(recorded.failed).toEqual(expect.arrayContaining(['deploy-exit', 'fence-snapshot']));
+    expect(recorded.deploy?.reason).toContain('UNKNOWN');
+    expect(sshCommands(lane).some((command) => command.includes("mjs' fence "))).toBe(false);
+    expectNoRemoteMutation(lane);
+  },
+  CASE_MS,
+);
+
+it(
+  'redacts the proxy values from test:deploy output before it reaches either log',
+  async () => {
+    const lane = await fixture();
+    await lane.scenario((scenario) => {
+      const deploy = scenario.output['test:deploy'] ?? '';
+      scenario.output['test:deploy'] = `${deploy}proxy http://lane:${lane.secret}@127.0.0.1:9\n`;
+      scenario.errput = { 'test:deploy': `auth ${lane.secret} rejected\n` };
+    });
+
+    const result = await run(lane, 'redact');
+
+    expect(result.status).toBe(0);
+    const recorded = summary(lane, 'redact');
+    expect(recorded).toMatchObject({ failed: [], deploy: { exit: 0 } });
+    for (const file of [
+      join(lane.runDir('redact'), 'test-deploy.log'),
+      join(recorded.remoteRoot, 'test-deploy.log'),
+    ]) {
+      const text = readFileSync(file, 'utf8');
+      expect(text).not.toContain(lane.secret);
+      expect(text).toContain('[REDACTED]');
+      expect(text).toContain('Tests  9 passed (9)');
+    }
   },
   CASE_MS,
 );

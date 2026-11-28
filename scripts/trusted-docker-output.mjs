@@ -3,6 +3,28 @@ import { open } from 'node:fs/promises';
 
 const REDACTED = Buffer.from('[REDACTED]');
 
+/**
+ * Every form a proxy credential can take in output: the whole non-empty values, then for each URL
+ * value its user and password (raw and decoded) and their Basic token.
+ */
+export function proxyOutputSecrets(environment) {
+  const values = Object.values(environment).filter((value) => value.length > 0);
+  const secrets = [...values];
+  for (const value of values) {
+    try {
+      const url = new URL(value);
+      const username = decodeURIComponent(url.username);
+      const password = decodeURIComponent(url.password);
+      secrets.push(url.username, url.password, username, password);
+      if (username || password)
+        secrets.push(Buffer.from(`${username}:${password}`).toString('base64'));
+    } catch {
+      // Non-URL proxy inputs still retain their exact transport semantics and whole-value exclusion.
+    }
+  }
+  return secrets;
+}
+
 function nextMatch(buffer, secrets) {
   let selected;
   for (const secret of secrets) {

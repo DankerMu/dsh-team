@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { CHROME_VERSION } from '../../scripts/verify-browser-runtime.mjs';
 
 const REPOSITORY = fileURLToPath(new URL('../../', import.meta.url));
 const FAKE = fileURLToPath(new URL('./vps-lane-fake.mjs', import.meta.url));
@@ -17,6 +16,9 @@ const UNIT_SETTLE_MS = 10_000;
 export const NODE_PIN = '24.9.1';
 const PNPM_PIN = '10.9.2';
 const HURL_PIN = '7.7.7';
+// Differs from the lane checkout's own pin, so every run proves the pin is read from <sha>.
+const CHROME_PIN = '150.0.7000.1';
+const CHROME_LINE = /^(export const CHROME_VERSION = ')[^']*(';)$/m;
 const TOOLCHAIN = '.local/share/dsh-team/toolchain';
 const ACCEPTED_LOGIN = 'DankerMu';
 const EMPTY_SHA256 = createHash('sha256').update('').digest('hex');
@@ -62,6 +64,7 @@ export interface Scenario {
   stdout: string;
   exits: Record<string, number>;
   output: Record<string, string>;
+  errput?: Record<string, string>;
 }
 
 export interface LaneOptions {
@@ -75,6 +78,10 @@ export interface LaneOptions {
   missingTool?: 'node' | 'pnpm' | 'hurl' | 'chrome';
   /** Platform layer mode for the first migration file. */
   migrationMode?: number;
+  /** CHROME_VERSION at the lane sha; null removes the pin line. */
+  chromePin?: string | null;
+  /** DSH_TEAM_LANE_QUERY_MS for the lane child. */
+  queryMs?: string;
 }
 
 export const STDOUT =
@@ -203,6 +210,14 @@ async function images(directory: string, migrationMode: number) {
   return archives;
 }
 
+/** The lane checkout's browser runtime script with the pin line set to `pin` (null: removed). */
+function browserRuntime(pin: string | null) {
+  const text = readFileSync(join(REPOSITORY, 'scripts/verify-browser-runtime.mjs'), 'utf8');
+  if (!CHROME_LINE.test(text))
+    throw new Error('verify-browser-runtime.mjs has no CHROME_VERSION line');
+  return text.replace(CHROME_LINE, pin === null ? '' : `$1${pin}$2`);
+}
+
 async function repository(directory: string, options: LaneOptions) {
   const copy = (name: string) => `COPY --from=browser-runtime /${name} /opt/dsh-team/${name}\n`;
   const files: Record<string, string> = {
@@ -211,6 +226,9 @@ async function repository(directory: string, options: LaneOptions) {
     'images/browser-verification/Dockerfile': `FROM base\n${copy('probe-browser-runtime.mjs')}${copy('byte-listener.mjs')}${options.browserCopy ?? ''}`,
     'scripts/probe-browser-runtime.mjs': 'export {};\n',
     'scripts/byte-listener.mjs': 'export {};\n',
+    'scripts/verify-browser-runtime.mjs': browserRuntime(
+      options.chromePin === undefined ? CHROME_PIN : options.chromePin,
+    ),
     'platform/Dockerfile': 'FROM base\n',
     'images/dsh-user/Dockerfile': 'FROM base\n',
     'plugins/alpha/index.js': 'export {};\n',
@@ -229,7 +247,7 @@ async function toolchain(home: string, options: LaneOptions, pnpmShim: string) {
   const root = join(home, TOOLCHAIN);
   const node = join(root, `node-v${NODE_PIN}-linux-x64`, 'bin');
   const pnpm = join(root, `pnpm-${PNPM_PIN}`, 'node_modules', '.bin');
-  const chrome = join(root, `chrome-${CHROME_VERSION}`, 'chrome-headless-shell-linux64');
+  const chrome = join(root, `chrome-${CHROME_PIN}`, 'chrome-headless-shell-linux64');
   if (options.missingTool !== 'node') {
     await mkdir(node, { recursive: true });
     await symlink(process.execPath, join(node, 'node'));
@@ -257,6 +275,17 @@ if [ -f "${state}/ssh-fail" ]; then
     echo "$((count - 1)) $pattern" > "${state}/ssh-fail"
     echo 'ssh: connect to host giap-vps port 22: Operation timed out' >&2; exit 255
   fi
+fi
+run() { cd "${remote}" && /usr/bin/env -i HOME="${remote}" PATH="${bin}:/usr/bin:/bin" LANG=C.UTF-8 /bin/bash -c "$cmd"; }
+# ssh-drop: run the first matching command with no session I/O, then lose the connection.
+if [ -f "${state}/ssh-drop" ] && [[ "$cmd" == *"$(cat "${state}/ssh-drop")"* ]]; then
+  rm "${state}/ssh-drop"; run < /dev/null > /dev/null 2>&1
+  echo 'Connection to giap-vps closed by remote host.' >&2; exit 255
+fi
+# ssh-delay: hold the first matching command for <seconds> before it runs.
+if [ -f "${state}/ssh-delay" ]; then
+  read -r seconds pattern < "${state}/ssh-delay"
+  if [[ "$cmd" == *"$pattern"* ]]; then rm "${state}/ssh-delay"; sleep "$seconds"; fi
 fi
 cd "${remote}" && exec /usr/bin/env -i HOME="${remote}" PATH="${bin}:/usr/bin:/bin" LANG=C.UTF-8 /bin/bash -c "$cmd"
 `;
@@ -417,6 +446,7 @@ async function setUpLane(root: string, options: LaneOptions): Promise<Lane> {
             HOME: home,
             LANG: 'C.UTF-8',
             DSH_TEAM_LANE_INTERVAL_MS: '1',
+            ...(options.queryMs === undefined ? {} : { DSH_TEAM_LANE_QUERY_MS: options.queryMs }),
           },
           stdio: ['ignore', 'pipe', 'pipe'],
           timeout: LANE_MS,
