@@ -8,6 +8,13 @@ Moved verbatim from the root `AGENTS.md`; normative behaviour lives in the OpenS
 
 `pnpm dev` builds the web package, then uses the native Node watcher. A missing `.env` is optional: supply required configuration through the environment. When `.env` exists at launch, Node retains its own parsing and inherited-environment precedence; source/import changes still reload the application. Restart `pnpm dev` after creating an env file that was absent at launch. The foreground launcher never creates an empty file or changes `dev:bg`/production startup. `pnpm test:integration platform/test/dev-watch.integration.test.ts` exercises native watch startup/reload and unreadable-input rejection with owned nonsecret process fixtures; real source-main health still requires the configured Docker Engine.
 
+Prerequisites (moved from the root `AGENTS.md`):
+
+- Run `pnpm install` after clone. It needs Node and pnpm at the versions in `.tool-versions`, plus `hurl`, `shellcheck`, and `gitleaks` on `PATH`.
+- Python 3 with standard-library `pty`/`termios` support is required for administrator CLI terminal integration verification on POSIX hosts; missing prerequisites fail rather than skip that coverage.
+- `pnpm dev` builds the web package and runs the native Node watcher; a missing `.env` is optional (`platform/README.md` § Local development).
+- The source and built entrypoints need a real Docker Unix socket and await reconciliation; `pnpm e2e` provisions its own private Docker/containerd runtime on a nonroot Linux host with sudo (`scripts/README.md` § Fresh-data e2e runtime).
+
 ## Configuration
 
 Subnet pool, upstream mode and platform container name (`PLATFORM_SUBNET_POOL`, `PLATFORM_UPSTREAM_MODE`, `PLATFORM_CONTAINER_NAME`): `platform/src/orchestrator/README.md`.

@@ -38,6 +38,18 @@ Archive guardrail probes choose a path absent from the copied repository baselin
 
 `pnpm test:guardrails` runs the real diff-size and lockfile step text (no `pipefail`, like the default `run` shell) in a merge-ref fixture with a stale `BASE_SHA`: exact counts for dash-leading and blank lines, an advanced base and a PR-added `* -diff` `.gitattributes`, the lockfile-only rejection over a stale base, failure on a non-merge or octopus `HEAD`, and both exact label `if:`s. It runs the diff-size, lockfile and docs-only scope steps on a criss-cross merge ref (two merge bases; a lockfile-only and a code-reverting PR that git's chosen base would pass), `pr-merge-ref.sh` on two-parent, one-parent, octopus, criss-cross and unrelated-parent `HEAD`s, `pr-diff-lines.sh` for binary, symlink-to-file and fail-closed cases, the docs-only scope step's exact `RANGE` expression, and that step on a merge ref over a stale base, on a non-merge `pull_request` `HEAD`, on a non-ASCII name and on `docs/a.md`, `platform/x.ts`, `z.md` (git's doc, code, doc order), #612's real Dependabot message plus three near misses, the add-then-delete, merge-only, merge-then-delete, merge-then-rename and clean sync-merge naming ranges, and `lint:pr X X`.
 
+## Enforcement blind spots
+
+Gates indexed in the root `AGENTS.md` § Enforcement Index that prove less than they appear to; review covers the rest.
+
+- Coverage gate: proves lines ran, not that assertions are meaningful — review checks test strength.
+- Test pairing: proves a test file exists, not that it was written first or tests the right behavior.
+- Contract snapshot: catches drift in routes that declare a schema, never routes without one.
+- Integration-test deadlines: the lint rejects only `const x = Date.now() + <literal>` in `*.integration.test.ts`; budget derivation is review-only.
+  Unchecked forms: `constraints.yaml` `testing.integration_deadline_from_case_budget.blind_spots`.
+- Pre-commit hooks are local and skippable; CI and branch protection are the authoritative layer. Naming and commitlint have that CI layer over the PR range (`pnpm lint:pr`), never over history before the PR's base.
+- Claude Code write-time hooks are not installed: `.claude/` is untracked local tooling.
+
 ## Fresh-data e2e runtime
 
 The actual source and built platform entrypoints require a real Docker Unix socket and await reconciliation. `pnpm dev:bg` preflights the configured Engine. `pnpm e2e` instead provisions its own Docker and containerd runtime before main: nonroot Linux, installed `/usr/bin/dockerd`, `/usr/bin/containerd`, `/usr/sbin/ip`, Python3, util-linux `unshare` with PID/mount/network namespace support, and noninteractive sudo are required. Unsupported hosts (including macOS) fail closed; no shared-Engine fallback or image pull is performed. Run only reviewed trusted checkout code with that privilege. Build, main and the complete HTTP smoke client run together on the private namespace's loopback; printed loopback URLs are not host-facing listeners. The scenario remains nonroot and retains health and exact schema/migration ledger checks. CI's default daemon still serves dev-server smoke.

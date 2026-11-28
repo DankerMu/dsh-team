@@ -6,7 +6,7 @@
 # Enforcement vocabulary: advice < review-only < warn < block < gate.
 
 strictness_profile:
-  schema_version: "3.6.0"
+  schema_version: "1"
   level: "L3"
   chosen_by_user: true
   # Deviations below the L3 default. Each names the trigger that ends it.
@@ -47,9 +47,6 @@ generated_sections:
       owner: "eng-init"
       template_version: "3.6.0"
     - title: "Conventions"
-      owner: "eng-init"
-      template_version: "3.6.0"
-    - title: "Code Review Self-Check"
       owner: "eng-init"
       template_version: "3.6.0"
     - title: "Architecture Discipline"

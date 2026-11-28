@@ -3,6 +3,23 @@
 > TypeScript and test-discipline detail for `platform/` and, later, `plugins/`.
 > The root `AGENTS.md` is the operating contract; this file extends it and never overrides it.
 
+## Stack & Versions
+
+Pins live in `package.json` and `.tool-versions`; dependency policy: root `AGENTS.md` § Stack & Versions.
+
+| Layer                    | Choice                            | Version       | Why                                                       |
+| ------------------------ | --------------------------------- | ------------- | --------------------------------------------------------- |
+| Language                 | TypeScript                        | 6.0           | upper bound supported by typescript-eslint                |
+| Runtime                  | Node.js                           | 24            | runs `.ts` sources directly; matches user image           |
+| Framework                | Fastify                           | 5             | route schemas feed the OpenAPI contract                   |
+| Persistence              | SQLite                            | 3             | better-sqlite3; `PLATFORM_DATA_DIR/platform.db` (D8, D19) |
+| Test runner              | Vitest + v8 coverage              | 5             |                                                           |
+| Platform UI              | React + Vite                      | 18, 8         | local static build served by the same Fastify origin      |
+| Platform UI browser      | Playwright Chromium               | 1.65          | pinned verification-only platform UI lane                 |
+| DSH verification browser | Chrome for Testing headless shell | 156.0.8078.80 | verification-only isolated Docker runtime                 |
+| Linter                   | ESLint, typescript-eslint         | 10, 8         | strict type-checked rule set                              |
+| Formatter                | Prettier                          | 3             |                                                           |
+
 ## TypeScript rules
 
 - **Node runs the sources directly.** Relative imports carry the `.ts` extension; type-only imports use `import type`. Enums, namespaces, and constructor parameter properties are rejected by `erasableSyntaxOnly` because Node cannot strip them.
